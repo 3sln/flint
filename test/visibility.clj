@@ -20,7 +20,7 @@
 ;; stdlib files the JVM/bb classloader cannot load, and the `files` maps below
 ;; are hand-written stand-ins rather than the real stdlib anyway.
 (babashka.classpath/add-classpath "src")
-(require '[flint.compiler.resolve :as project] '[flint.compiler.core :as compiler]
+(require '[babashka.fs] '[flint.compiler.resolve :as project] '[flint.compiler.core :as compiler]
          '[clojure.string :as str])
 
 (def fails (atom 0))
@@ -650,5 +650,58 @@
                                 "app/main.cljc" (ns-mark-app "libx.inner" "l")}
                                []))
        "declaring no workspaces means nothing here is checked, same as `^:internal` always was")
+
+;; THE COMPILER'S INTERNALS, THROUGH THE REAL DRIVER (`DECISIONS.md#four-units`).
+;; `src/` is the `flint/compiler` workspace (`src/deps.edn`) and its namespaces
+;; are `^:internal` but for the entry points a host names. A guest in another
+;; workspace naming one is refused; the control is the SAME program in a root
+;; whose `deps.edn` names `flint/compiler` -- one fact different -- which
+;; compiles. `flint.compiler.canon` because it requires only `flint.rt`, so the
+;; probe compiles in seconds rather than compiling the compiler.
+(defn driver-outcome [ws]
+  (let [d (str (babashka.fs/create-temp-dir {:prefix "flint-internal"}))]
+    (spit (str d "/app.cljc")
+          "(ns app (:require [flint.compiler.canon :as c]))\n(defn main [_] (c/ckey 1))\n")
+    (when ws (spit (str d "/deps.edn") (str "{:flint/workspace " ws "}")))
+    (let [p (.start (doto (ProcessBuilder. (into-array String ["./bin/flint" ":src" d ":src" "src"
+                                                              ":fn" "app/main" ":out" (str d "/app.wasm")]))
+                      (.redirectErrorStream true)))
+          out (slurp (.getInputStream p))]
+      {:code (.waitFor p) :out out})))
+
+(let [r (driver-outcome nil)]
+  (check "a guest naming a flint.compiler.* internal is refused, naming the workspace"
+         (and (not= 0 (:code r)) (str/includes? (:out r) "flint.compiler.canon/ckey is internal to flint/compiler"))
+         (:out r)))
+(let [r (driver-outcome "flint/compiler")]
+  (check "  ... and the same program inside flint/compiler compiles"
+         (= 0 (:code r)) (:out r)))
+
+;; A GUARD SURVIVES AN ALIAS (`DECISIONS.md#defalias`). A `.fln` in a workspace
+;; that holds `:host` publishes the guarded `flint.host/ask` under its own name;
+;; a program in a workspace that does not hold it is refused for calling the
+;; alias, exactly as for calling `flint.host/ask`. The control grants the
+;; caller `:host` and nothing else changes.
+(defn alias-guard-outcome [grant?]
+  (let [d (str (babashka.fs/create-temp-dir {:prefix "flint-alias-guard"}))]
+    (babashka.fs/create-dirs (str d "/lib"))
+    (babashka.fs/create-dirs (str d "/app"))
+    (spit (str d "/lib/deps.edn") "{:flint/workspace probe/lib :flint/capabilities-grant [:host]}")
+    (spit (str d "/lib/lib.fln") "(ns lib (:require [flint.host :as h]))\n(defalias ask flint.host/ask)\n")
+    (spit (str d "/app/app.cljc") "(ns app (:require [lib]))\n(defn main [_] (lib/ask :x))\n")
+    (when grant? (spit (str d "/app/deps.edn") "{:flint/workspace probe/app :flint/capabilities-grant [:host]}"))
+    (let [p (.start (doto (ProcessBuilder. (into-array String ["./bin/flint" ":src" (str d "/app") ":src" (str d "/lib")
+                                                              ":fn" "app/main" ":out" (str d "/app.wasm")]))
+                      (.redirectErrorStream true)))
+          out (slurp (.getInputStream p))]
+      {:code (.waitFor p) :out out})))
+
+(let [r (alias-guard-outcome false)]
+  (check "a guard is checked through a defalias: calling the alias of a guarded var is refused"
+         (and (not= 0 (:code r)) (str/includes? (:out r) "flint.host/ask is guarded with #{:host}"))
+         (:out r)))
+(let [r (alias-guard-outcome true)]
+  (check "  ... and a caller holding the grant compiles"
+         (= 0 (:code r)) (:out r)))
 
 (when (pos? @fails) (println "  " @fails "FAILURES") (System/exit 1))

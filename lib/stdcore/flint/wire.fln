@@ -21,7 +21,11 @@
   Reach the bytes. A writer is opaque, `port/send` takes it, and nothing
   answers its contents -- a guest that could ask would concatenate them with
   bytes of its own and forge a port tag."
-  (:require [flint.protocols :as proto]))
+  ;; stdcore REFERS NOTHING OF `clojure.core` (`DECISIONS.md#four-units`): it is
+  ;; in every image, `clojure.core` is a library only the namespaces referring it
+  ;; reach, and what this needs of it lives in `flint.core.impl`.
+  (:refer-clojure :only [])
+  (:require [flint.core.impl :refer :all] [flint.protocols :as proto]))
 
 (declare emit)
 

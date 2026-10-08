@@ -1,4 +1,4 @@
-(ns flint.compiler.modmeta
+(ns ^:internal flint.compiler.modmeta
   "What a module says about itself (`DECISIONS.md#module-metadata-and-shards`, part 1).
 
   A runner handed a pre-built `.wasm` needs two different things from it, and

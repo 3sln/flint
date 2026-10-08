@@ -1,4 +1,4 @@
-(ns flint.compiler.hostfns
+(ns ^:internal flint.compiler.hostfns
   "Builtin implementations for compile-time evaluation.
 
   When `flint.compiler.eval` runs a macro body it hits `:native` nodes -- the macro called

@@ -1442,7 +1442,7 @@ needs one.
 
 ## What a protocol call costs here, specifically
 
-`find-protocol-method` (`lib/stdcore/clojure/core.fln:1754-1763`) is:
+`find-protocol-method` (`lib/stdextra/clojure/core.fln:1754-1763`) is:
 
 ```clojure
   (or (get (meta x) mkey)
@@ -1491,7 +1491,7 @@ path, and the whole question is which operations those are.
 ## The principle
 
 It is already written in the codebase, above `pr-str*`'s last arm
-(`lib/stdcore/clojure/core.fln:1447-1456`):
+(`lib/stdextra/clojure/core.fln:1447-1456`):
 
 > The branches above are core's own types, and core knowing its own internals is
 > not a coupling. Anything a LIBRARY adds is a different matter: a

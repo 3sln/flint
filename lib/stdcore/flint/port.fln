@@ -66,8 +66,11 @@
   There used to be a `:codec` option taking `:encode`/`:decode` functions. It is
   gone, and so is the raw byte mode it sat on: a port that carried strings the
   program had already serialised was the same hole seen from the other side."
-  (:refer-clojure :exclude [send])
-  (:require [flint.rt] [flint.protocols :as proto] [flint.wire :as wire]))
+  ;; stdcore REFERS NOTHING OF `clojure.core` (`DECISIONS.md#four-units`): it is
+  ;; in every image, `clojure.core` is a library only the namespaces referring it
+  ;; reach, and what this needs of it lives in `flint.core.impl`.
+  (:refer-clojure :only [])
+  (:require [flint.core.impl :refer :all] [flint.rt] [flint.protocols :as proto] [flint.wire :as wire]))
 
 (defn channel
   "A coupled pair `[a b]`: what goes into one comes out of the other, both ways.
@@ -317,9 +320,13 @@
   eventually, but eventually is not promptly, and a host holding a resource open
   until a collection happens is a real cost."
   [bindings & body]
+  ;; NO SYNTAX QUOTE: the reader expands one into `clojure.core/seq`,
+  ;; `clojure.core/concat` and `clojure.core/list`, and this namespace refers
+  ;; nothing of `clojure.core` (`DECISIONS.md#four-units`). This is what the
+  ;; syntax-quoted version expanded to, built by hand.
   (if (empty? bindings)
-    `(do ~@body)
-    `(let [~(first bindings) ~(second bindings)]
-       (try
-         (with-open ~(vec (drop 2 bindings)) ~@body)
-         (finally (close ~(first bindings)))))))
+    (cons 'do body)
+    (list 'clojure.core/let [(first bindings) (second bindings)]
+          (list 'try
+                (list* 'flint.port/with-open (vec (drop 2 bindings)) body)
+                (list 'finally (list 'flint.port/close (first bindings)))))))

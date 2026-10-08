@@ -30,7 +30,7 @@
 (def ^:private b64-alphabet
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 
-(defn base64
+(defn ^:internal base64
   "Bytes to base64 text. Encoded INTO a byte string and decoded once at the
   end: base64 is ASCII, so the output is bytes, and the obvious version --
   accumulating one-character strings and joining -- allocates one string per
@@ -81,7 +81,7 @@
     (reset! pending-files nil)
     (if files (update spec :files merge files) spec)))
 
-(defn compile-to-base64
+(defn ^:internal compile-to-base64
   "`spec` is EDN: {:sources {ns {:src .. :file ..}} :order [..] :entry ns/fn
   :builtins #{..}}. Returns the base64 image, with native slots left at zero for
   the host to patch (`flint.compiler.image/patch-native-slots`)."
@@ -102,7 +102,7 @@
     (loop [i 0 m {}]
       (if (>= i 64) m (recur (inc i) (assoc m (flint.rt/b-at bs i) i))))))
 
-(defn base64-decode
+(defn ^:internal base64-decode
   "Base64 text to a byte string. Through a transient, because the input is a
   whole wasm module and appending persistently would copy it on every byte."
   [s]
@@ -263,7 +263,7 @@
 
 (declare compile-project-spec)
 
-(defn compile-project
+(defn ^:internal compile-project
   "Compile from an ENTRY and a map of source files, resolving `:require`s here.
 
   `spec` is EDN:
@@ -292,7 +292,7 @@
   [spec-edn]
   (compile-project-spec (read-spec spec-edn)))
 
-(defn compile-project-spec
+(defn ^:internal compile-project-spec
   "`compile-project` on a spec that is already a value.
 
   The native CLI hands the FILE BODIES over this way: an envelope read as EDN,
@@ -314,7 +314,7 @@
 ;; door is followed by the value-taking function `compile` shares with it.
 (declare wasm-artifact llvm-artifact jvm-artifact)
 
-(defn compile-to-wasm
+(defn ^:internal compile-to-wasm
   "Compile a program and splice it into a PREBUILT runtime module, producing a
   standalone `.wasm`.
 
@@ -417,7 +417,7 @@
          :arities (when res (:total res))
          :shaken (when shaken (second shaken))})))))
 
-(defn compile-to-llvm
+(defn ^:internal compile-to-llvm
   "Compile a program to ONE LLVM IR module (`DECISIONS.md#llvm-ir-target`).
 
   `spec` is `compile-to-wasm`'s, minus everything about a wasm module: there is
@@ -466,7 +466,7 @@
 ;; symbol: compile-to-clr*".
 (declare compile-to-clr*)
 
-(defn compile-to-clr
+(defn ^:internal compile-to-clr
   "Compile a program to ONE .NET assembly (`DECISIONS.md#four-operations`).
 
   `spec` is `compile-to-llvm`'s. Nothing is linked and nothing needs to be: the
@@ -582,7 +582,7 @@
                                        ;; an artifact's build description.
                                        :meta-map (:meta spec)}))})))))
 
-(defn compile-to-jvm
+(defn ^:internal compile-to-jvm
   "Compile a program to ONE CLASS FILE, or to a jar carrying a runtime beside it.
 
   THE ARTIFACT IS THE CLASS, and `base-b64` being EMPTY is how a caller asks for
@@ -652,7 +652,7 @@
                     (jvm/emit image opts)
                     (jvm/pack base image opts))})))))
 
-(defn preread
+(defn ^:internal preread
   "Every file in the spec READ AHEAD OF ITS FEATURES, as `{path bytes}` -- what
   the native CLI embeds for the standard library so that a compile does not
   read it again (`DECISIONS.md#stdlib-preread`).
@@ -757,7 +757,7 @@
       (:refused r) {:errors (mapv (fn [x] (assoc x :kind :refused)) (:refused r))}
       :else (-> r (dissoc :bytes) (assoc :artifact (:bytes r))))))
 
-(defn compile-with
+(defn ^:internal compile-with
   "Compile a program, asking `resolver` -- any `flint.compiler.resolve/Resolver` -- for
   each namespace it reaches (`DECISIONS.md#namespaces-over-the-system-port`,
   migration step 2). The entry for anything that can implement the protocol:

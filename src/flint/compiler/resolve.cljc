@@ -1,4 +1,4 @@
-(ns flint.compiler.resolve
+(ns ^:internal flint.compiler.resolve
   "Reading a program from its entry namespace outwards.
 
   This used to live in `bin/flint`, which is babashka, which meant the compiler
@@ -24,7 +24,8 @@
   (:require [flint.compiler.reader :as reader]
             [flint.compiler.forms :as forms]
             [clojure.string :as str]
-            [flint.compiler.core :as compiler]))
+            [flint.compiler.core :as compiler]
+            [flint.compiler.analyzer :as ana]))
 
 (def virtual-namespaces
   "Namespaces with no source: the compiler answers for them itself."
@@ -494,19 +495,29 @@
   ;; Nothing pinned ahead of `flint.check` uses `expect`, which is what makes
   ;; putting it last safe -- checked in `clojure.core`, `flint.core` and
   ;; `flint.protocols`.
-  (let [pinned '[clojure.core flint.core flint.protocols flint.check]
+  ;;
+  ;; `flint.core.impl` LEADS, and `clojure.core` FOLLOWS `flint.check` now
+  ;; (`DECISIONS.md#four-units`): the stdcore namespaces refer nothing of
+  ;; `clojure.core` and are initialised from `flint.core.impl`, which requires
+  ;; nothing; `clojure.core` aliases and requires `flint.core.impl` and
+  ;; `flint.protocols`; and nothing pinned ahead of `flint.check` uses
+  ;; `expect`, which is still what makes putting it after the three safe.
+  (let [pinned '[flint.core.impl flint.core flint.protocols flint.check clojure.core]
         pin? (set pinned)]
     (concat (filter (set order) pinned)
             (remove pin? order))))
 
 (defn project-roots
-  "Where a compile starts reading: `roots*` or the entry with `clojure.core`,
-  plus `flint.port`, `flint.wire` and `flint.check`, always. One function
-  for every walk, so no two can start from different places."
+  "Where a compile starts reading: `roots*` or the entry, plus `flint.port`,
+  `flint.wire` and `flint.check`, always. One function for every walk, so no
+  two can start from different places."
   [entry-ns features roots*]
-  ;; `clojure.core` is a root, not something the graph reaches: every namespace
-  ;; refers it implicitly and almost none of them `:require` it, so starting
-  ;; only from the entry collects a program whose `str` resolves to nothing.
+  ;; `clojure.core` IS NOT A ROOT ANY MORE (`DECISIONS.md#four-units`). It was
+  ;; one because every namespace refers it implicitly and almost none of them
+  ;; `:require` it, so starting only from the entry collected a program whose
+  ;; `str` resolved to nothing. The implicit refer is an EDGE now, contributed
+  ;; by each referring namespace's own prelude (`take-answer`), so the graph
+  ;; reaches `clojure.core` exactly when something refers it.
   ;;
   ;; `flint.system` IS NOT A ROOT ANY MORE. It was the control plane, added
   ;; here and in every other door because nothing referenced it; the control
@@ -537,7 +548,7 @@
   ;; `#?(:flint/check A :default B)` branches (`DECISIONS.md#namespaces-over-the-system-port`
   ;; §4), the same deferred-`#?` mechanism every other stdlib file already
   ;; uses -- not whether the namespace is requested at all.
-  (let [given (vec (or roots* ['clojure.core entry-ns]))]
+  (let [given (vec (or roots* [entry-ns]))]
     (into given '[flint.port flint.wire flint.check])))
 
 (defn- finish-project
@@ -651,12 +662,23 @@
               ;; the prelude BEFORE the code using it. SELF IS EXCLUDED: a
               ;; workspace's prelude covers its own namespaces too, and one of
               ;; them would otherwise be asked to precede itself.
-              pre (remove (fn [x] (= x n)) (map :ns (:prelude s)))
+              ;;
+              ;; AND THE IMPLICIT `clojure.core` REFER IS ONE TOO
+              ;; (`DECISIONS.md#namespaces-over-the-system-port` §4, the
+              ;; 2026-10-07 addendum): `ana/ns-prelude` is the prelude this
+              ;; namespace's names resolve through, `:refer-clojure` and
+              ;; `:refer :all` applied, so `clojure.core` is asked for on
+              ;; behalf of each namespace that refers it -- and of none that
+              ;; does not -- instead of being a root of every compile. Its
+              ;; position is the `ns` form's, so a resolver that cannot answer
+              ;; it reports `:missing` AT THE NAMESPACE THAT NEEDED IT.
+              pre (remove (fn [x] (= x n)) (map :ns (ana/ns-prelude (:dialect s) (:prelude s) nsf)))
+              at (select-keys (meta nsf) [:line :column])
               by (reduce (fn [m [r pos]]
                            (update m r (fnil conj [])
                                    (assoc pos :ns n :file (:file s))))
                          (:by st)
-                         (concat reqs (map (fn [x] [x {}]) pre)))]
+                         (concat reqs (map (fn [x] [x at]) pre)))]
           (-> st
               (update :sources assoc n s)
               (update :order conj n)

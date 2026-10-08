@@ -18,7 +18,11 @@
   `Navigable` stay in `clojure.core.protocols`, `EqualityPartition` and `Diff`
   in `clojure.data`: those are ports, and a port that renames its subject is
   no longer a port."
-  (:require [flint.core :refer [kind]]))
+  ;; stdcore REFERS NOTHING OF `clojure.core` (`DECISIONS.md#four-units`): it is
+  ;; in every image, `clojure.core` is a library only the namespaces referring it
+  ;; reach, and what this needs of it lives in `flint.core.impl`.
+  (:refer-clojure :only [])
+  (:require [flint.core.impl :refer :all] [flint.core :refer [kind]]))
 
 ;; NO `:require` of `clojure.core` above: it is referred everywhere already,
 ;; and naming it here would make a require CYCLE with `clojure.core`'s own
@@ -207,7 +211,7 @@
 ;; port.
 
 
-(defn methods-of [tbl] @tbl)
+(defn methods-of [tbl] (deref tbl))
 
 ;; PUBLIC, and it has to be: `defprotocol` EMITS a call to this into its
 ;; expansion, so the reference lands in whatever namespace used the macro. A

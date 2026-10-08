@@ -1,4 +1,4 @@
-(ns flint.compiler.jvm
+(ns ^:internal flint.compiler.jvm
   "`:to :jvm`: a program as ONE CLASS FILE.
 
   ## What the artifact is

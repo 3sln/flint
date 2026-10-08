@@ -45,8 +45,10 @@ console.log('the flint SDK');
 // `compile` is ASYNCHRONOUS now, and source comes only from a RESOLVER
 // (`DECISIONS.md#namespaces-over-the-system-port`): `(ns) => answer`. There is
 // no `files`, `workspaces` or `standardLibrary` option any more -- the SDK's
-// embedded stdcore answers `clojure.core` and seven others unconditionally,
-// and `stdextra()` is the optional rest, composed in with `chain`.
+// embedded stdcore answers six namespaces unconditionally (`flint.port`,
+// `flint.wire`, `flint.protocols`, `flint.core`, `flint.core.impl`,
+// `flint.check`), and `stdextra()` is the optional rest -- `clojure.core`
+// among it since `DECISIONS.md#four-units` -- composed in with `chain`.
 //
 // Checks are ON BY DEFAULT (`DEFAULT_FEATURES` carries `:flint/check`), and
 // `flint.check` -- the namespace that feature needs -- lives in STDEXTRA, not
@@ -55,7 +57,10 @@ console.log('the flint SDK');
 // omitted" below for what happens, and does not happen, without it.
 const compiler = await Compiler.load();
 ok(`stdcore is answered by the SDK itself, never by a resolver (${stdcoreNamespaces().join(', ')})`,
-   stdcoreNamespaces().includes('clojure.core') && stdcoreNamespaces().length > 5);
+   // EXACTLY the six (`DECISIONS.md#four-units`), and not `clojure.core`, which
+   // is a stdextra library a program reaches by referring it.
+   JSON.stringify(stdcoreNamespaces()) === JSON.stringify(
+     ['flint.check', 'flint.core', 'flint.core.impl', 'flint.port', 'flint.protocols', 'flint.wire']));
 
 const appFiles = {
   'app.cljc': `(ns app (:require [app.util :as u]))
@@ -437,7 +442,9 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
 // stdcore is answered by the SDK's embedded copy BEFORE a host's resolver ever
 // runs (`compileCall` in `resolve.js`: `if (stdcore.has(ns)) return stdcore(ns)`
 // -- the user resolver is not even called). This resolver tries to redefine
-// `clojure.core`'s `str` and `flint.port` (a control-plane root) with hostile
+// `flint.core.impl` -- where `clojure.core`'s `str` LIVES since
+// `DECISIONS.md#four-units`, `clojure.core/str` being an alias of it -- and
+// `flint.port` (a control-plane root) with hostile
 // source, and ALSO answers `clojure.set` -- not stdcore -- with a distinctive
 // body. The calls it was actually asked for are recorded, so "never consulted
 // for a stdcore name" is checked directly and not inferred from the program's
@@ -446,7 +453,7 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
   const calls = [];
   const hostile = (ns) => {
     calls.push(String(ns));
-    if (String(ns) === 'clojure.core' || String(ns) === 'flint.port') {
+    if (String(ns) === 'flint.core.impl' || String(ns) === 'flint.port') {
       return `(ns ${ns}) (defn str [& _] "PWNED")`;
     }
     if (String(ns) === 'clojure.set') {
@@ -465,7 +472,7 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
   const resolve = chain(hostile, stdextra(), fromMap(files));
   const sb = await (await compiler.compile({ resolve, fn: 'hostileapp/go' })).sandbox();
   const result = await sb.call('hostileapp/go');
-  eq('clojure.core is the real one despite a hostile resolver answering it',
+  eq('clojure.core/str is the real one despite a hostile resolver answering flint.core.impl',
      result[0], '12');
   // The CONTROL: the same resolver's answer for a non-stdcore name DOES take
   // effect, so "stdcore never reached the resolver" is not just "the resolver
@@ -473,7 +480,7 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
   eq('and a non-stdcore name (clojure.set) DOES take the resolver\'s answer',
      result[1], 'MINE');
   ok('the resolver was never asked for a stdcore name',
-     !calls.includes('clojure.core') && !calls.includes('flint.port'),
+     !calls.includes('flint.core.impl') && !calls.includes('flint.port'),
      JSON.stringify(calls));
 }
 
@@ -507,40 +514,66 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
 
 // --- stdextra omitted --------------------------------------------------------
 //
-// `clojure.core` is stdcore, so a resolver with no `stdextra()` still compiles a
-// program written in it. `flint.check` is stdcore too now (the maintainer's
-// revision, `DECISIONS.md#checks`): it moved out of stdextra because it is
-// meant to ALWAYS exist, a root unconditionally like `flint.port`/`flint.wire`,
-// picking one of its two internal variants per compile rather than vanishing
-// under `:optimize [perf]`. So, unlike before this revision, checks being ON
-// is no longer a reason a no-`stdextra()` compile needs `checks: false` --
-// that case is asserted directly below, next to the one `clojure.set` (a true
-// stdextra namespace) still needs it for.
+// `clojure.core` IS NOT stdcore ANY MORE (`DECISIONS.md#four-units`): stdcore is
+// `flint.port`, `flint.wire`, `flint.protocols`, `flint.core`, `flint.core.impl`
+// and `flint.check`, which refer nothing of `clojure.core`, and `clojure.core`
+// is an ordinary stdextra library, reached by the namespaces that refer it --
+// each one's prelude is its implicit require edge. So a resolver with no
+// `stdextra()` compiles a program that refers nothing of `clojure.core`, and
+// reports `clojure.core` `:missing` AT THE NAMESPACE that refers it otherwise.
+// The two differ in exactly the one clause.
+for (const checks of [true, false]) {
+  const calls = [];
+  const bare = { 'stdxapp.cljc': '(ns stdxapp (:refer-clojure :only []))\n(defn go [] (flint.rt/add 1 2))' };
+  const inner = fromMap(bare);
+  const recording = (ns) => { calls.push(String(ns)); return inner(ns); };
+  const sb = await (await compiler.compile({
+    resolve: recording, fn: 'stdxapp/go', exports: ['stdxapp/go'], checks,
+  })).sandbox();
+  eq(`checks ${checks}: (:refer-clojure :only []) compiles with no stdextra() at all`,
+     await sb.call('stdxapp/go'), 3);
+  ok(`checks ${checks}: and nothing asked the resolver for clojure.core`,
+     !calls.includes('clojure.core'), JSON.stringify(calls));
+
+  const refers = { 'stdxapp.cljc': '(ns stdxapp)\n(defn go [] (flint.rt/add 1 2))' };
+  let errs = null;
+  try { await compiler.compile({ resolve: fromMap(refers), fn: 'stdxapp/go', checks }); }
+  catch (e) { errs = e.errors; }
+  const miss = Array.isArray(errs) && errs.find((e) => e[':kind'] === ':missing' && e[':ns'] === 'clojure.core');
+  ok(`checks ${checks}: the control, which refers clojure.core, reports it :missing at that namespace`,
+     miss && miss[':file'] === 'stdxapp.cljc' && miss[':line'] === 1
+       && JSON.stringify(miss[':required-by']) === '["stdxapp"]',
+     JSON.stringify(errs));
+}
 {
   const filesD1 = { 'stdxapp.cljc': '(ns stdxapp) (defn go [] (vec (map str [1 2 3])))' };
   const sb = await (await compiler.compile({
-    resolve: fromMap(filesD1), fn: 'stdxapp/go', exports: ['stdxapp/go'], checks: false,
+    resolve: chain(stdextra(), fromMap(filesD1)), fn: 'stdxapp/go', exports: ['stdxapp/go'],
   })).sandbox();
-  eq('with no stdextra() and checks off, clojure.core is all there (str, map, vec)',
+  eq('with stdextra() composed, clojure.core is all there (str, map, vec)',
      await sb.call('stdxapp/go'), ['1', '2', '3']);
+}
 
-  // CHECKS ON, STILL NO `stdextra()` AT ALL: this used to throw "no source for
-  // flint.check" (588f2980), because flint.check lived in stdextra. It is
-  // stdcore now, so the identical program with no `resolve` fallback beyond
-  // `fromMap` simply compiles.
-  const sb2 = await (await compiler.compile({
-    resolve: fromMap(filesD1), fn: 'stdxapp/go', exports: ['stdxapp/go'],
+// --- defalias is .fln-only ----------------------------------------------------
+//
+// `DECISIONS.md#defalias`: the dialect is the one the ANSWER carries (here, the
+// extension `fromMap` found), never anything the source says. The pair differs
+// only in the file's extension.
+{
+  const lib = '(ns aliaslib)\n(defn- twice [x] (flint.rt/mul 2 x))\n(defalias dbl aliaslib/twice)\n';
+  const app = '(ns aliasapp (:require [aliaslib]))\n(defn go [] (aliaslib/dbl 21))';
+  const sb = await (await compiler.compile({
+    resolve: chain(stdextra(), fromMap({ 'aliaslib.fln': lib, 'aliasapp.cljc': app })),
+    fn: 'aliasapp/go', exports: ['aliasapp/go'],
   })).sandbox();
-  eq('and with checks ON and no stdextra() at all, it compiles too -- flint.check is stdcore now',
-     await sb2.call('stdxapp/go'), ['1', '2', '3']);
-
-  const filesD2 = { 'stdxapp2.cljc': '(ns stdxapp2 (:require [clojure.set :as set])) (defn go [] (set/union #{1} #{2}))' };
-  let errsD2 = null;
-  try { await compiler.compile({ resolve: fromMap(filesD2), fn: 'stdxapp2/go', checks: false }); }
-  catch (e) { errsD2 = e.errors; }
-  ok('and a program requiring clojure.set, still without stdextra, reports it :missing',
-     Array.isArray(errsD2) && errsD2.some((e) => e[':kind'] === ':missing' && e[':ns'] === 'clojure.set'),
-     JSON.stringify(errsD2));
+  eq('defalias in a .fln: the alias of a private var is callable, and is that var', await sb.call('aliasapp/go'), 42);
+  let threw = null;
+  try {
+    await compiler.compile({ resolve: chain(stdextra(), fromMap({ 'aliaslib.cljc': lib, 'aliasapp.cljc': app })),
+                             fn: 'aliasapp/go' });
+  } catch (e) { threw = e; }
+  ok('the same defalias in a .cljc is refused, naming the dialect',
+     threw && /defalias is flint-only/.test(threw.message), String(threw));
 }
 
 // --- flint.check with no #? wrapper, in both builds ---------------------------

@@ -643,7 +643,7 @@ builtins! {
         rt.re_find_all(re, s, limit)
     };
 
-    // The primitive `swap!` retries on (`lib/stdcore/clojure/core.fln`). It lives here
+    // The primitive `swap!` retries on (`lib/stdextra/clojure/core.fln`). It lives here
     // rather than in core because a read-modify-write cannot be made atomic in
     // the language it is written in.
     //

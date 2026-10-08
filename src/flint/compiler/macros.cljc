@@ -1,4 +1,4 @@
-(ns flint.compiler.macros
+(ns ^:internal flint.compiler.macros
   "The bootstrap macros: the ones the compiler must know before any Clojure has
   been compiled.
 
@@ -230,8 +230,12 @@
         ;; than guessed. Protocol dispatch reads `(meta value)`, so anything
         ;; meant for dispatch goes here.
         runtime-m (:flint/value-meta m)
+        ;; THE BUILTIN, not `clojure.core/with-meta` (which is this builtin with
+        ;; a var around it): a `defn` must mean the same in a namespace that
+        ;; refers nothing of `clojure.core` -- stdcore's predicates carry
+        ;; `:flint/value-meta` in a checking build (`DECISIONS.md#four-units`).
         fform (if (seq runtime-m)
-                (list 'clojure.core/with-meta fform runtime-m)
+                (list 'flint.rt/with-meta fform runtime-m)
                 fform)]
     (list 'def (with-meta name m) fform)))
 

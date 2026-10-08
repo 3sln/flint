@@ -310,6 +310,16 @@ uses -- is untouched.
 
 **Change requests:** _none recorded_
 
+## flint.core.impl
+
+**Reviewed:** ☐ not signed off
+
+**ADDED 2026-10-08, `^:internal`** (`DECISIONS.md#four-units`, `DECISIONS.md#defalias`): workspace-local to `flint/flint`, so no program outside the standard library may name it. What stdcore -- `flint.port`, `flint.wire`, `flint.protocols`, `flint.core`, `flint.check` -- needs of `clojure.core`: 123 vars, 6 of them macros, moved verbatim out of `clojure.core`, which aliases 102 of them back out under their public names. Its contents are a MEASUREMENT (the closure of what stdcore names, through `clojure.core`'s own text), not a design: re-derive rather than extend.
+
+**Is this public?** No, by construction. Required by the five stdcore namespaces and by `clojure.core` (`:refer :all`), all in its own workspace.
+
+**Change requests:** _none recorded_
+
 ## flint.pike
 
 **Reviewed:** ☐ not signed off
@@ -566,6 +576,8 @@ namespace.
 **Reviewed:** ☐ not signed off
 
 322 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
+
+**CHANGED 2026-10-08 (`DECISIONS.md#four-units`, `DECISIONS.md#defalias`): a stdextra library, not stdcore, and 102 of its public vars are ALIASES.** `lib/stdextra/clojure/core.fln`; the vars stdcore needs live in `flint.core.impl` and are published here by `defalias`, so the public surface is unchanged -- same names, same arities, same macro-ness (`doc/manifest.edn` regenerated: only `:file` moved). What changed for an embedder: a host that omits `stdextra()` now gets no `clojure.core`, and a program referring it reports it `:missing` at the referring namespace; and a host resolver that answers `clojure.core` ahead of `stdextra()` now REPLACES it, exactly as it may replace any other stdextra name -- it used to be answered before any resolver ran. A reviewer should decide whether that second consequence is wanted.
 
 **Change requests:** _none recorded_
 

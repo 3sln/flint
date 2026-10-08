@@ -13,12 +13,12 @@
 (def shipped
   "Namespace -> source file. These are what a flint program can require.
 
-  The standard library is now two source roots (AGENTS.md's restructure
-  note): `lib/stdcore/` and `lib/stdextra/`, both `.fln`, both owned by
+  The standard library is two source roots (`DECISIONS.md#four-units`):
+  `lib/stdcore/` and `lib/stdextra/`, both `.fln`, both owned by
   `lib/deps.edn`. Which of the two a namespace landed in is not meaningful
   here -- this map just has to point at the right file."
-  '{clojure.core      "lib/stdcore/clojure/core.fln"
-    clojure.string    "lib/stdcore/clojure/string.fln"
+  '{clojure.core      "lib/stdextra/clojure/core.fln"
+    clojure.string    "lib/stdextra/clojure/string.fln"
     clojure.core.protocols "lib/stdextra/clojure/core/protocols.fln"
     clojure.datafy    "lib/stdextra/clojure/datafy.fln"
     clojure.data      "lib/stdextra/clojure/data.fln"
@@ -29,7 +29,7 @@
     clojure.edn       "lib/stdextra/clojure/edn.fln"
     flint.core        "lib/stdcore/flint/core.fln"
     flint.protocols   "lib/stdcore/flint/protocols.fln"
-    flint.regex       "lib/stdcore/flint/regex.fln"
+    flint.regex       "lib/stdextra/flint/regex.fln"
     flint.thread      "lib/stdextra/flint/thread.fln"
     flint.port        "lib/stdcore/flint/port.fln"
     flint.protocols.io "lib/stdextra/flint/protocols/io.fln"
@@ -56,6 +56,15 @@
 ;; vars where Clojure's publishes five. Diffing against them would report gaps
 ;; in flint that are really gaps in the baseline.
 
+(def alias-macros
+  "Every macro a `defalias` may name, as qualified symbols -- read from the one
+  namespace the standard library aliases out of, before anything asks."
+  (delay
+    (let [src (slurp (io/file root "lib/stdcore/flint/core/impl.fln"))]
+      (into #{} (for [f (reader/read-all src {:file "impl.fln" :features #{:flint}})
+                      :when (and (seq? f) (= 'defmacro (first f)))]
+                  (symbol "flint.core.impl" (name (second f))))))))
+
 (defn- defined-by
   "The names one top-level form defines, each with whether it is a macro and
   whether it is private.
@@ -80,6 +89,12 @@
       (concat (entry (second f) false false)
               (mapcat (fn [sig] (when (seq? sig) (entry (first sig) false false)))
                       (drop 2 f)))
+
+      ;; AN ALIAS IS A PUBLISHED NAME (`DECISIONS.md#defalias`): `clojure.core`
+      ;; publishes most of what `flint.core.impl` defines this way, and the
+      ;; name is a macro exactly when its target is (`alias-macros`).
+      (= 'defalias head)
+      (entry (second f) (contains? @alias-macros (nth f 2)) (boolean (:private (meta (second f)))))
 
       (contains? '#{def defn defn- defmacro} head)
       (entry (second f)

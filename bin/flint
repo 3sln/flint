@@ -89,9 +89,19 @@ DEPS_EDN="{:paths [\"$ROOT/src\" \"$ROOT/driver\" \"$ROOT/lib/deps\" \"$ROOT/cli
                   org.clojure/data.xml {:mvn/version \"0.2.0-alpha9\"}}}"
 CPFILE="$ROOT/target/flint-driver.cp"
 mkdir -p "$ROOT/target"
-if [ ! -f "$CPFILE" ] || [ "$(head -1 "$CPFILE")" != "$DEPS_EDN" ]; then
+# THE KEY IS ONE LINE, and the file is REPLACED, never rewritten in place
+# (`DECISIONS.md#four-units`, found on its gate run). `DEPS_EDN` is three lines
+# and this compared it against `head -1` of the file, which never matched -- so
+# EVERY call recomputed the classpath and truncated the file in place, and
+# `bin/conform-hosts`, which runs this under `xargs -P`, had one call read the
+# file while another was writing it: "Could not locate flint/driver/main" for
+# one fixture. That stayed latent while the cache file happened to be written
+# before the parallel section; changing `DEPS_EDN` made the race visible.
+KEY=$(printf '%s' "$DEPS_EDN" | tr '\n' ' ')
+if [ ! -f "$CPFILE" ] || [ "$(head -1 "$CPFILE")" != "$KEY" ]; then
   CP=$(cd "$ROOT" && clojure -Sdeps "$DEPS_EDN" -Spath)
-  { printf '%s\n' "$DEPS_EDN"; printf '%s\n' "$CP"; } > "$CPFILE"
+  { printf '%s\n' "$KEY"; printf '%s\n' "$CP"; } > "$CPFILE.$$"
+  mv -f "$CPFILE.$$" "$CPFILE"
 fi
 CP=$(tail -1 "$CPFILE")
 #

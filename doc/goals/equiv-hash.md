@@ -20,7 +20,7 @@ reader would have taken for a survey.
 **And `=` is not one line.** `hash` is; `=` has three arities and the variadic
 one loops. What is true, and is what §1 rests on, is that EVERY arity goes
 straight into the runtime with no protocol dispatch anywhere
-(`lib/stdcore/clojure/core.fln:29` and `:46`):
+(`lib/stdextra/clojure/core.fln:29` and `:46`):
 
 ```clojure
 (defn =

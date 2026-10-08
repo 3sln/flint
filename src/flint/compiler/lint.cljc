@@ -1,4 +1,4 @@
-(ns flint.compiler.lint
+(ns ^:internal flint.compiler.lint
   "What was written for flint, and does nothing.
 
   Metadata is an OPEN MAP. Anyone may put anything in it -- another library,

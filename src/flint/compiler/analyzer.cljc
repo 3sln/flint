@@ -1,4 +1,4 @@
-(ns flint.compiler.analyzer
+(ns ^:internal flint.compiler.analyzer
   "Forms to AST.
 
   Two phases, not one: analysis produces an AST, and only then does emission
@@ -24,7 +24,7 @@
 
 (def specials
   '#{def if do let* loop* recur fn* quote var throw try catch finally binding
-     new set! . monitor-enter monitor-exit deftype* reify* case* ns})
+     new set! . monitor-enter monitor-exit deftype* reify* case* ns defalias})
 
 (defn- err [msg data]
   (throw (ex-info (str "compile error: " msg) (assoc data :type :compile))))
@@ -92,18 +92,114 @@
       (seq exc) (not (some (fn [x] (= (name x) nm)) exc))
       :else true)))
 
-(defn prelude-of
-  "The prelude in force for `nsname`.
+(defn- ns-clauses
+  "The clauses of `ns` form `nsf` that are lists, or nil for no form."
+  [nsf]
+  (when (seq? nsf) (filter seq? (drop 2 nsf))))
 
-  A PORTABLE file gets `clojure.core` and nothing else, whatever its workspace
-  declares: a `.cljc` is read by other platforms' readers too, and they know
-  nothing of a flint workspace's prelude, so a name that resolved only through
-  one would not be portable (`DECISIONS.md#dialects-and-preludes`)."
+(defn refer-clojure-opts
+  "`nsf`'s `(:refer-clojure ..)` options as a map, or nil when it has none.
+
+  `:exclude` and `:only` are honoured (`DECISIONS.md#four-units`); they used to
+  be parsed and dropped, which left a namespace that wrote `(:refer-clojure
+  :exclude [count])` and then defined its own `count` resolving it to
+  `clojure.core`'s wherever it was used before its own `defn`. `:rename` is
+  REFUSED, by name, rather than accepted and ignored the way all three used to
+  be."
+  [nsf]
+  (when-let [c (first (filter (fn [c] (= :refer-clojure (first c))) (ns-clauses nsf)))]
+    (let [kvs (rest c)]
+      (when (odd? (count kvs))
+        (throw (ex-info (str "(:refer-clojure ..) in (ns " (second nsf) ") takes keyword/value pairs")
+                        {:type :compile :form c})))
+      (let [m (apply hash-map kvs)]
+        (doseq [k (keys m)]
+          (when-not (contains? #{:exclude :only} k)
+            (throw (ex-info (str "(:refer-clojure " k " ..) in (ns " (second nsf) ") is not supported;"
+                                 " flint honours :exclude and :only")
+                            {:type :compile :form c}))))
+        (doseq [k [:exclude :only]
+                :let [v (get m k)]
+                :when (and (contains? m k) (not (and (sequential? v) (every? symbol? v))))]
+          (throw (ex-info (str "(:refer-clojure " k " ..) in (ns " (second nsf) ") takes a vector of symbols")
+                          {:type :compile :form c})))
+        m))))
+
+(defn refer-all-targets
+  "Every namespace `nsf` requires with `:refer :all`, in order.
+
+  `:refer :all` is Clojure's, and flint treats it as what it is: the required
+  namespace's public names joining THIS namespace's prelude, under the
+  prelude's ambiguity rule (`prelude-resolve`) rather than a second one."
+  [nsf]
+  (vec (for [c (ns-clauses nsf)
+             :when (= :require (first c))
+             spec (rest c)
+             :when (and (sequential? spec) (symbol? (first spec)))
+             :let [opts (apply hash-map (rest spec))]
+             :when (= :all (:refer opts))]
+         (first spec))))
+
+(defn- narrow-core
+  "The `clojure.core` prelude entry `e` narrowed by `:refer-clojure` options
+  `rc`, or nil when nothing of it is left."
+  [e rc]
+  (let [nm (fn [xs] (set (map name xs)))
+        inc* (when (seq (:include e)) (nm (:include e)))
+        exc (nm (:exclude e))]
+    (cond
+      (contains? rc :only)
+      (let [only (cond->> (map name (:only rc))
+                   inc* (filter inc*)
+                   true (remove exc))]
+        (when (seq only) {:ns (:ns e) :include (mapv symbol only)}))
+
+      (contains? rc :exclude)
+      (let [drop* (nm (:exclude rc))]
+        (if inc*
+          (let [left (remove drop* (map name (:include e)))]
+            (when (seq left) {:ns (:ns e) :include (mapv symbol left)}))
+          {:ns (:ns e) :exclude (mapv symbol (sort (into exc drop*)))}))
+
+      :else e)))
+
+(defn ns-prelude
+  "The prelude in force for a namespace of `dialect`, in a workspace declaring
+  `ws-prelude`, whose `ns` form is `nsf` (nil for none).
+
+  ONE FUNCTION FOR BOTH QUESTIONS IT ANSWERS: which names resolve without a
+  `:require` (`prelude-of`, below) and which namespaces the WAVE WALK must ask
+  for on this namespace's behalf (`flint.compiler.resolve/take-answer`). The
+  implicit `clojure.core` refer is an implicit REQUIRE EDGE this namespace
+  contributes, not a root the walk names ahead of time
+  (`DECISIONS.md#namespaces-over-the-system-port` §4, the 2026-10-07 addendum),
+  so a namespace that refers nothing of it -- `(:refer-clojure :only [])` --
+  asks for nothing.
+
+  A PORTABLE file starts from `clojure.core` and nothing else, whatever its
+  workspace declares: a `.cljc` is read by other platforms' readers too, and
+  they know nothing of a flint workspace's prelude, so a name that resolved
+  only through one would not be portable (`DECISIONS.md#dialects-and-preludes`).
+  `:refer-clojure` then narrows the `clojure.core` entry, and `:refer :all`
+  appends its namespaces."
+  [dialect ws-prelude nsf]
+  (let [base (if (and (seq ws-prelude) (= :flint dialect)) ws-prelude default-prelude)
+        rc (refer-clojure-opts nsf)
+        narrowed (if rc
+                   (vec (keep (fn [e] (if (= 'clojure.core (:ns e)) (narrow-core e rc) e)) base))
+                   (vec base))]
+    (into narrowed (map (fn [t] {:ns t}) (refer-all-targets nsf)))))
+
+(defn prelude-of
+  "The prelude in force for `nsname`: what `analyze-ns` recorded from its `ns`
+  form (`ns-prelude`), or, for a namespace with none -- the compiler's own
+  synthetic ones -- what its dialect and workspace give."
   [cc nsname]
-  (let [w (get-in cc [:workspaces nsname])]
-    (if (and (seq (:prelude w)) (= :flint (:dialect w)))
-      (:prelude w)
-      default-prelude)))
+  (or (get-in cc [:namespaces nsname :prelude])
+      (let [w (get-in cc [:workspaces nsname])]
+        (ns-prelude (:dialect w) (:prelude w) nil))))
+
+(declare alias-target)
 
 (defn prelude-resolve
   "The qualified var `sym` names through `nsname`'s prelude, or nil.
@@ -121,10 +217,13 @@
         hits (for [e (prelude-of cc nsname)
                    :when (entry-allows? e nm)
                    :let [q (symbol (str (:ns e)) nm)]
-                   :when (get-in cc [:vars q])]
+                   :when (or (get-in cc [:vars q]) (get-in cc [:defaliases q]))]
                q)]
     (cond
       (empty? hits) nil
+      ;; TWO NAMES FOR ONE VAR ARE ONE HIT: `clojure.core` refers
+      ;; `flint.core.impl` and also aliases its vars (`DECISIONS.md#defalias`).
+      (and (next hits) (apply = (map (fn [h] (alias-target cc h)) hits))) (first hits)
       (next hits) (throw (ex-info
                           (str nm " is offered by " (str/join " and " (map namespace hits))
                                ", and this workspace's prelude lists both."
@@ -160,8 +259,9 @@
         (when (get-in cc [:declared (symbol (str nsname) n)])
           (symbol (str nsname) n)))))
 
-(defn qualify
-  "The fully qualified symbol a name refers to in `env`, or nil."
+(defn- qualify*
+  "The fully qualified symbol a name refers to in `env`, or nil, BEFORE a
+  `defalias` is followed (`qualify`)."
   [env sym]
   (let [cc @(:cc env)
         nsname (current-ns env)
@@ -205,6 +305,32 @@
 
           :else q))
       (unqualified-ref cc nsname sym))))
+
+(defn alias-target
+  "`q` with every `defalias` followed to the var it names, or `q` itself.
+
+  THE TARGET CARRIES WHERE IT CAME FROM, as `::via` metadata on the symbol:
+  `record-dep!` checks privacy and guards against the name the source WROTE
+  -- a public `clojure.core/seq` -- and records the dependency, the inline,
+  the macro and the native alias of the var it IS. So a call through an alias
+  compiles exactly as a call to its target: no extra var, no extra call
+  (`DECISIONS.md#defalias`)."
+  [cc q]
+  (if-let [t (and (symbol? q) (get-in cc [:defaliases q]))]
+    (loop [t t seen #{q}]
+      (if-let [u (get-in cc [:defaliases t])]
+        (if (contains? seen t)
+          (err (str "defalias cycle through " t) {:sym q})
+          (recur u (conj seen t)))
+        (with-meta t {::via q})))
+    q))
+
+(defn qualify
+  "The fully qualified symbol a name refers to in `env`, or nil: `qualify*`,
+  with a `defalias` followed to its target (`alias-target`)."
+  [env sym]
+  (when-let [q (qualify* env sym)]
+    (alias-target @(:cc env) q)))
 
 (defn native-name
   "If `sym` names a Rust builtin via the `flint.rt` namespace, the catalogue
@@ -644,8 +770,18 @@
                     :namespace-mark (when-not (:internal m) ns-mark)}))))))))
 
 (defn- record-dep! [env q]
-  (privacy-check! env q)
-  (guard-check! env q)
+  ;; THROUGH AN ALIAS, the checks are about the name the source wrote
+  ;; (`alias-target`'s `::via`), and the dependency is on the var it is.
+  ;; A GUARD IS CHECKED ON BOTH: an alias is a second name for the target's
+  ;; authority, never a way around it -- else a `.fln` could publish a guarded
+  ;; var under an unguarded name. Privacy is checked on the name written only,
+  ;; because exposing a var under a public name is what an alias is for, and
+  ;; whether its definer may name the target is checked where it is defined
+  ;; (`analyze-defalias`).
+  (let [wrote (or (::via (meta q)) q)]
+    (privacy-check! env wrote)
+    (guard-check! env wrote)
+    (when-not (= wrote q) (guard-check! env q)))
   (when-let [cur (:current-var env)]
     (vswap! (:cc env) update-in [:deps cur] (fnil conj #{}) q)))
 
@@ -801,12 +937,15 @@
              narrowed))
 
 ;; Core vars whose variadic arity is exactly a left fold of their two-argument
-;; one: `([a b & more] (reduce f (f a b) more))` in lib/stdcore/clojure/core.fln. A
+;; one: `([a b & more] (reduce f (f a b) more))` in lib/stdextra/clojure/core.fln. A
 ;; call with three or more arguments is analyzed as the nested two-argument
 ;; calls it is equal to. A LIST, and short, because each entry is a claim about
 ;; a definition elsewhere; `min`/`max` are not here because nothing about their
 ;; typing needs it, and `/` is not because it has no typed result to reach.
-(def ^:private left-folds '#{clojure.core/+ clojure.core/- clojure.core/*})
+;; THE VARS, not the names a source writes: `clojure.core/+` is an alias of
+;; `flint.core.impl/+` (`DECISIONS.md#defalias`), and every reference arrives
+;; here as its target.
+(def ^:private left-folds '#{flint.core.impl/+ flint.core.impl/- flint.core.impl/*})
 
 (defn- resolve-syntax-quoted
   "The symbol `` `sym `` names in the namespace being compiled, by Clojure's
@@ -1004,7 +1143,7 @@
                  (= [[:arg 0] [:arg 1]] (get-in @(:cc env) [:native-alias (:sym f) 2 :tmpl])))
           ;; `(* 2.0 zr zi)` as `(* (* 2.0 zr) zi)`. The variadic arity of
           ;; `+`, `-` and `*` IS that left fold (`(reduce add (add a b) more)`
-          ;; in lib/stdcore/clojure/core.fln), so the value, the evaluation order and
+          ;; in lib/stdextra/clojure/core.fln), so the value, the evaluation order and
           ;; any overflow are the same -- but the nested form reaches the
           ;; two-argument builtin, which has a result type, where the variadic
           ;; call through `reduce` had none. That one missing tag was enough to
@@ -1533,11 +1672,17 @@
 
     ns (analyze-ns env form)
 
+    ;; ONLY AS A TOP-LEVEL FORM, which `flint.compiler.core/analyze-namespace!`
+    ;; handles before analysis reaches here: an alias is registered by the read
+    ;; pre-pass, and a macro expansion or a nested form is invisible to it.
+    defalias (err "defalias must be written as a top-level form of a .fln namespace (DECISIONS.md#defalias)"
+                  {:form form :line (:line (meta form)) :column (:column (meta form))})
+
 ;; `letfn*` IS NO LONGER A SPECIAL FORM HERE. It was in the set above and errored
     ;; with "letfn* is not implemented", which put a refusal in the analyzer for a
     ;; feature `clojure.core/letfn` already implemented -- so the spelling decided
     ;; whether mutual recursion worked. It is a macro now
-    ;; (`lib/stdcore/clojure/core.fln`), and `letfn` expands into it rather than carrying
+    ;; (`lib/stdextra/clojure/core.fln`), and `letfn` expands into it rather than carrying
     ;; a second copy of the volatile-stub trick.
 
     (new set! . monitor-enter monitor-exit deftype* reify* case*)
@@ -1704,6 +1849,25 @@
   ([nsname] (:entry (script-spec nsname)))
   ([nsname attrs] (:entry (script-spec nsname attrs))))
 
+(defn analyze-defalias
+  "A top-level `(defalias name target)` (`DECISIONS.md#defalias`), already
+  registered by the pre-pass (`flint.compiler.core/declare-namespace!`, which
+  also refused it outside a `.fln`). What is left to check needs analysis: that
+  the target EXISTS, and that this namespace may NAME it -- the same privacy
+  and guard checks any reference gets, from the alias's own namespace, so an
+  alias cannot publish what its definer could not have called. Emits nothing:
+  every reference compiles as a reference to the target."
+  [env form]
+  (let [cc @(:cc env)
+        q (symbol (str (current-ns env)) (name (second form)))
+        t (alias-target cc q)]
+    (when-not (or (get-in cc [:vars t]) (get-in cc [:declared t]))
+      (err (str "defalias " q " names " t ", which does not exist")
+           {:sym q :target t :line (:line (meta form)) :column (:column (meta form))}))
+    (privacy-check! env (with-meta t nil))
+    (guard-check! env t)
+    {:op :const :val nil}))
+
 (defn analyze-ns [env form]
   (let [[_ nsname & clauses] form
         cc (:cc env)]
@@ -1732,8 +1896,13 @@
               (vswap! cc update-in [:namespaces nsname :requires] (fnil conj #{}) target)
               (when-let [a (:as opts)]
                 (vswap! cc assoc-in [:namespaces nsname :aliases a] target))
-              (doseq [r (:refer opts)]
-                (vswap! cc assoc-in [:namespaces nsname :refers r] (symbol (str target) (name r))))))
+              ;; `:refer :all` is not a list of names: it joins this
+              ;; namespace's PRELUDE (`ns-prelude`, recorded below).
+              (when-not (= :all (:refer opts))
+                (doseq [r (:refer opts)]
+                  (vswap! cc assoc-in [:namespaces nsname :refers r] (symbol (str target) (name r)))))))
+          ;; HONOURED, through `ns-prelude` below -- it used to be this arm's
+          ;; whole body, `nil`, parsed and dropped.
           :refer-clojure nil
           :import (throw (ex-info "flint has no host interop, so :import is not supported" {:form c}))
           ;; AN UNKNOWN CLAUSE IS AN ERROR, not a no-op. Dropping it silently
@@ -1744,4 +1913,9 @@
                                " clause -- flint takes "
                                (str/join ", " (sort (map str known-ns-clauses))))
                           {:form c :ns nsname :known known-ns-clauses})))))
+    ;; THE PRELUDE THIS NAMESPACE RESOLVES THROUGH, from the same function the
+    ;; wave walk asked its edges of, so the names it may use without a
+    ;; `:require` and the namespaces collected for it cannot disagree.
+    (let [w (get-in @cc [:workspaces nsname])]
+      (vswap! cc assoc-in [:namespaces nsname :prelude] (ns-prelude (:dialect w) (:prelude w) form)))
     {:op :const :val nil}))

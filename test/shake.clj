@@ -82,7 +82,7 @@
                          (edn/read-string (str/replace (slurp "dist/slots.json")
                                                        #"\"([^\"]+)\":" "\"$1\" ")))))
 ;; The four shipped roots (AGENTS.md's restructure note) merged into one map,
-;; keyed by the ns-relative path within its own root -- `lib/stdcore/clojure/core.fln`
+;; keyed by the ns-relative path within its own root -- `lib/stdextra/clojure/core.fln`
 ;; becomes `"clojure/core.fln"`, same as `lib/deps/flint/deps.cljc` becomes
 ;; `"flint/deps.cljc"` -- so `find-src` below can look a namespace up without
 ;; knowing which root it shipped from.

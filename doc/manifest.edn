@@ -3,7 +3,7 @@
 ;; separately asserts that every var listed under :present really is
 ;; callable from a compiled module.
 {clojure.core
- {:file "lib/stdcore/clojure/core.fln",
+ {:file "lib/stdextra/clojure/core.fln",
   :present
   #{*
     +
@@ -835,7 +835,7 @@
   :extra #{},
   :compared-with clojure.set},
  clojure.string
- {:file "lib/stdcore/clojure/string.fln",
+ {:file "lib/stdextra/clojure/string.fln",
   :present
   #{blank?
     capitalize
@@ -1051,7 +1051,7 @@
   :macros #{},
   :count 17},
  flint.regex
- {:file "lib/stdcore/flint/regex.fln",
+ {:file "lib/stdextra/flint/regex.fln",
   :present
   #{find-from
     find-from-old

@@ -1,4 +1,4 @@
-(ns flint.compiler.emitter
+(ns ^:internal flint.compiler.emitter
   "AST to bytecode.
 
   A post-order walk, which is the whole argument for a stack machine on the

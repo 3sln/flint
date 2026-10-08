@@ -1,4 +1,4 @@
-(ns flint.compiler.classfile
+(ns ^:internal flint.compiler.classfile
   "A JVM class-file writer in flint, for the `:to :jvm` target's entry class.
 
   ## What it does and where it stops

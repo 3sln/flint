@@ -20,7 +20,7 @@ fn main() {
     // `.fln`, both owned by `lib/deps.edn` one directory up), and `flint.deps`'s,
     // `lib/deps` (`DECISIONS.md#four-units`). NOT `cli/lib`: `flint.cli` ships
     // with the two CLIs only. Keys are relative to EACH ROOT, not to `lib/` or
-    // the repo root -- `lib/stdcore/clojure/core.fln` becomes `"clojure/core.fln"`,
+    // the repo root -- `lib/stdextra/clojure/core.fln` becomes `"clojure/core.fln"`,
     // the same shape `lib/deps/flint/deps.cljc` becomes `"flint/deps.cljc"` --
     // so a namespace's key here matches what `flint.compiler.resolve/ns->path`
     // plus its extension would produce, regardless of which root shipped it.

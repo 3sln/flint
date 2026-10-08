@@ -1,4 +1,4 @@
-(ns flint.compiler.core
+(ns ^:internal flint.compiler.core
   "The driver: sources in, program image out.
 
   Three passes, and the middle one is the reason there are three:
@@ -127,6 +127,10 @@
           (defmacro) [[(second form) (assoc (vis-of (second form) false)
                                             :macro true)]]
       (defn-) [[(second form) (vis-of (second form) true)]]
+      ;; AN ALIAS DECLARES ITS NAME like any def, with its OWN visibility --
+      ;; `clojure.core/seq` is public whatever `flint.core.impl/seq` is
+      ;; (`defalias-form` below, `DECISIONS.md#defalias`).
+      (defalias) [[(second form) (assoc (vis-of (second form) false) :alias true)]]
       (declare) (mapv (fn [n] [n (vis-of n false)]) (rest form))
       (do) (vec (mapcat def-form-entries (rest form)))
       nil)))
@@ -492,6 +496,52 @@
       (cond (:internal m) :internal
             (:private m) :private))))
 
+(defn defalias-form?
+  "Is `f` a top-level `(defalias name target)`?"
+  [f]
+  (and (seq? f) (= 'defalias (first f))))
+
+(defn- ns-alias-map
+  "`{alias target}` from the `:as` of every libspec in `forms`' `ns` form, so
+  the pre-pass can read a `defalias` target written through an alias exactly
+  as `analyze-ns` will."
+  [forms]
+  (into {} (for [f forms :when (ns-form? f)
+                 c (drop 2 f) :when (and (seq? c) (= :require (first c)))
+                 spec (rest c) :when (sequential? spec)
+                 :let [a (:as (apply hash-map (rest spec)))] :when a]
+             [a (first spec)])))
+
+(defn- defalias-target
+  "The fully-qualified var a `(defalias name target)` in `nsname` names,
+  refusing every other shape by saying what it takes."
+  [nsname aliases f]
+  (let [[_ n t & more] f]
+    (when (or (seq more) (not (symbol? n)) (namespace n) (not (symbol? t)) (nil? (namespace t)))
+      (throw (ex-info (str "defalias in " nsname " takes an unqualified name and a QUALIFIED target var:"
+                           " (defalias seq flint.core.impl/seq). Got " (pr-str f))
+                      {:type :compile :ns nsname :form f})))
+    (let [tns (symbol (namespace t))]
+      (symbol (str (get aliases tns tns)) (name t)))))
+
+(defn- check-defalias-dialect!
+  "`defalias` IS `.fln`-ONLY (`DECISIONS.md#defalias`). It has no Clojure
+  meaning, so a portable file using it would not mean the same thing to
+  another platform's reader -- the line `DECISIONS.md#dialects-and-preludes`
+  draws around flint-only surface.
+
+  The dialect is the one the RESOLVER ANSWERED (`:workspaces nsname
+  :dialect`, lifted off the answer by `compile-image`), never anything the
+  source says about itself: there is no in-file spelling that unlocks it."
+  [cc nsname f]
+  (let [d (get-in @cc [:workspaces nsname :dialect])]
+    (when-not (= :flint d)
+      (throw (ex-info (str "compile error: defalias is flint-only and allowed only in a .fln namespace; "
+                           nsname " was answered as " (if d (name d) "no dialect")
+                           " (DECISIONS.md#defalias)")
+                      (merge {:type :compile :ns nsname :form f}
+                             (select-keys (meta f) [:line :column])))))))
+
 (defn declare-namespace!
   "Register every name one namespace's `forms` define, so that forward
   references -- within a namespace and between namespaces -- resolve without
@@ -506,7 +556,15 @@
   (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
   (when-let [mark (ns-mark forms)]
     (vswap! cc assoc-in [:namespaces nsname :ws-mark] mark))
-  (let [forms (flatten-top-level forms)]
+  (let [forms (flatten-top-level forms)
+        aliases (ns-alias-map forms)]
+    ;; DEFALIASES IN THE PRE-PASS, for the reason `:declared` is filled here:
+    ;; a namespace analysed before the definer resolves through the alias
+    ;; too. `qualify` maps the alias to its target at every reference.
+    (doseq [f forms :when (defalias-form? f)]
+      (check-defalias-dialect! cc nsname f)
+      (vswap! cc assoc-in [:defaliases (symbol (str nsname) (name (second f)))]
+              (defalias-target nsname aliases f)))
     (doseq [f forms, [n vis] (def-form-entries f)]
       (let [q (symbol (str nsname) (name n))]
         (vswap! cc assoc-in [:declared q] vis)
@@ -538,6 +596,11 @@
           (ana/analyze-ns env f))
 
         (nil? f) nil
+
+        ;; NO ITEM: an alias defines no var at run time. What is checked here
+        ;; is that its target exists and that THIS namespace may name it.
+        (defalias-form? f)
+        (ana/analyze-defalias (base-env cc nsname) f)
 
         :else
         (try
@@ -906,12 +969,34 @@
           call (if takes-caps?
                  (str "(" entry " args caps)")
                  (str "(" entry " args)"))
-          shim-src (str "(ns flint.main (:require [" (namespace entry) "]))\n"
-                        "(defn -main [in]\n"
-                        "  (let [args (nth in 0 nil)\n"
-                        "        caps (nth in 1 nil)\n"
-                        "        r " call "]\n"
-                        "    (if (string? r) r (pr-str r))))\n")]
+          ;; A PROGRAM WITHOUT `clojure.core` still gets a shim
+          ;; (`DECISIONS.md#four-units`): `clojure.core` is reached only by the
+          ;; namespaces that refer it, so a program whose namespaces all say
+          ;; `(:refer-clojure :only [])` compiles without it, and the shim
+          ;; cannot name it. It names the builtins and the printer's own var,
+          ;; `flint.core.impl/pr-str` -- which is `^:internal` to the standard
+          ;; library, so THE COMPILER places this namespace, which it wrote, in
+          ;; that workspace: conferred from outside the source, the way a
+          ;; resolver confers one, never asserted by it. `flint.core.impl` is in
+          ;; every program (stdcore requires it). With `clojure.core` present
+          ;; the shim is the one it always was.
+          core? (contains? (:namespaces @cc) 'clojure.core)
+          shim-src (if core?
+                     (str "(ns flint.main (:require [" (namespace entry) "]))\n"
+                          "(defn -main [in]\n"
+                          "  (let [args (nth in 0 nil)\n"
+                          "        caps (nth in 1 nil)\n"
+                          "        r " call "]\n"
+                          "    (if (string? r) r (pr-str r))))\n")
+                     (str "(ns flint.main (:refer-clojure :only []) (:require [" (namespace entry) "]))\n"
+                          "(defn -main [in]\n"
+                          "  (let [args (flint.rt/nth in 0 nil)\n"
+                          "        caps (flint.rt/nth in 1 nil)\n"
+                          "        r " call "]\n"
+                          "    (if (flint.rt/string? r) r (flint.core.impl/pr-str r))))\n"))]
+      (when-not core?
+        (vswap! cc assoc-in [:workspaces shim-ns]
+                {:workspace (get-in @cc [:workspaces 'flint.core.impl :workspace])}))
       (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>" {})))
 
     (let [entry-var 'flint.main/-main

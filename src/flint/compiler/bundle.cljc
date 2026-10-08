@@ -1,4 +1,4 @@
-(ns flint.compiler.bundle
+(ns ^:internal flint.compiler.bundle
   "Splice a program image into a PREBUILT wasm module, producing a standalone
   one.
 

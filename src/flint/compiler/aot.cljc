@@ -1,4 +1,4 @@
-(ns flint.compiler.aot
+(ns ^:internal flint.compiler.aot
   "Bytecode to wasm, one arity at a time (`DECISIONS.md#emit-wasm-instead-of-dispatch`).
 
   ## The shape, and why it is this shape

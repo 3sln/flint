@@ -1,4 +1,4 @@
-(ns flint.compiler.eval
+(ns ^:internal flint.compiler.eval
   "An interpreter for the analyzer's AST.
 
   This is what makes user `defmacro` work. A macro has to RUN at compile time,

@@ -50,7 +50,7 @@ true since. `Gc.cs` is 440 lines: a real generational collector ported from
 `RtParallel`'s problem and it is solved there, not absent here.
 
 `swap!` still loses updates under contention — it is a read-modify-write in
-`lib/stdcore/clojure/core.fln`, and the test says so rather than wishing otherwise.
+`lib/stdextra/clojure/core.fln`, and the test says so rather than wishing otherwise.
 Not a CLR problem; see `DECISIONS.md#emit-wasm-instead-of-dispatch`.
 
 ## The emitter is C#, and compiles on first call

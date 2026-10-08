@@ -1,4 +1,4 @@
-(ns flint.compiler.callentry
+(ns ^:internal flint.compiler.callentry
   "THE CALL LOOP, which the compiler carries itself and puts in every image
   (`DECISIONS.md#the-control-plane-is-the-runtimes`).
 

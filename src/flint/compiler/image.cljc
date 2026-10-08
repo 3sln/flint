@@ -1,4 +1,4 @@
-(ns flint.compiler.image
+(ns ^:internal flint.compiler.image
   "Writes the flint program image: the compiler's output, which `flint` splices
   into the linked module as a data segment.
 

@@ -1,4 +1,4 @@
-(ns flint.compiler.forms
+(ns ^:internal flint.compiler.forms
   "A compact encoding for READ FORMS -- what `flint.compiler.reader/read-deferred`
   answers -- so a file can travel already read (`DECISIONS.md#stdlib-preread`).
 

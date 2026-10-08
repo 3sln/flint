@@ -1,4 +1,4 @@
-(ns flint.compiler.wasmshake
+(ns ^:internal flint.compiler.wasmshake
   "The wasm half of `flint.compiler.shake`: get the call graph out of a module, and put
   the dead functions back in as nothing.
 

@@ -1,4 +1,4 @@
-(ns flint.compiler.types
+(ns ^:internal flint.compiler.types
   "The tag vocabulary, shared by the analyzer and the runtime.
 
   A tag written on a binding is a CHECKED claim, not a hint. `(let [^int x e]

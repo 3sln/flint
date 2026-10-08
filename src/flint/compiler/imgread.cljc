@@ -1,4 +1,4 @@
-(ns flint.compiler.imgread
+(ns ^:internal flint.compiler.imgread
   "Decodes a program image far enough to diff two of them. Exists because
   'the images differ at byte N' is not actionable, and the self-hosting test
   needs to say WHICH constant or function diverged."

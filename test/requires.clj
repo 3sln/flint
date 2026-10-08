@@ -140,6 +140,39 @@
                               "  #?(:flint/check (expect = 84 (zzz/twice 42))))")})]
   (check ":refer-clojure is still accepted" (= 0 (:exit r))))
 
+;; AND HONOURED, since `DECISIONS.md#four-units`: it was parsed and dropped.
+;; `count` is called BEFORE this namespace defines its own, which is exactly
+;; where the implicit `clojure.core` refer used to win; the control is the same
+;; file without the clause, where it still does.
+(let [src (fn [clause]
+            (str "(ns aaa " clause " (:require [flint.check :refer [expect]]))\n"
+                 "(defn ^:flint.check/test t []\n"
+                 "  #?(:flint/check (expect = 42 (count [1 2]))))\n"
+                 "(defn count [x] 42)"))
+      honoured (run {"aaa.cljc" (src "(:refer-clojure :exclude [count])")})
+      control (run {"aaa.cljc" (src "")})]
+  (check ":refer-clojure :exclude is honoured: the namespace's own count wins"
+         (= 0 (:exit honoured)))
+  (check "  ... and without it clojure.core's count is still the one called"
+         (not= 0 (:exit control))))
+
+(let [r (run {"aaa.cljc" (str "(ns aaa (:refer-clojure :only [str]))\n"
+                              "(defn ^:flint.check/test t [] (inc 1))")})]
+  (check ":refer-clojure :only leaves every other clojure.core name unresolved"
+         (and (not= 0 (:exit r)) (str/includes? (:text r) "unable to resolve symbol: inc"))))
+
+(let [r (run {"aaa.cljc" (str "(ns aaa (:refer-clojure :rename {inc plus1}))\n"
+                              "(defn ^:flint.check/test t [] nil)")})]
+  (check ":refer-clojure :rename is refused by name, not ignored"
+         (and (not= 0 (:exit r)) (str/includes? (:text r) ":rename"))))
+
+;; `:refer :all` is Clojure's, and joins the namespace's prelude.
+(let [r (run {"zzz.cljc" "(ns zzz)\n(defn twice [x] (* 2 x))"
+              "aaa.cljc" (str "(ns aaa (:require [zzz :refer :all] [flint.check :refer [expect]]))\n"
+                              "(defn ^:flint.check/test t []\n"
+                              "  #?(:flint/check (expect = 84 (twice 42))))")})]
+  (check ":refer :all refers every public name" (= 0 (:exit r))))
+
 
 ;; --- DIALECTS: `.fln` beside `.cljc` -------------------------------------
 ;;

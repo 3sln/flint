@@ -71,7 +71,11 @@
   it early would put it ahead of its own dependency. It joins strings with
   `flint.rt/str-join` rather than `clojure.string` for that reason and no
   other."
-  (:require))
+  ;; stdcore REFERS NOTHING OF `clojure.core` (`DECISIONS.md#four-units`): it is
+  ;; in every image, `clojure.core` is a library only the namespaces referring it
+  ;; reach, and what this needs of it lives in `flint.core.impl`.
+  (:refer-clojure :only [])
+  (:require [flint.core.impl :refer :all]))
 
 ;; --------------------------------------------------------------- protocol
 
@@ -83,8 +87,17 @@
 ;; pass" when the checking facility itself is the thing switched off, unlike
 ;; `expect` below, which has an obvious vanish.
 #?(:flint/check
-   (defprotocol Predicate
-     "How a value tests and describes itself.
+   ;; LONGHAND, the way `flint.protocols` writes its own: `defprotocol` and
+   ;; `extend-protocol` are `clojure.core`'s, and this namespace refers nothing
+   ;; of `clojure.core` (`DECISIONS.md#four-units`) -- it is stdcore, present in
+   ;; every image whether or not `clojure.core` is. This is exactly what
+   ;; `(defprotocol Predicate (check [p args]) (explain [p args]))` and
+   ;; `(extend-protocol Predicate :fn (check [f args] (apply f args)))` expand
+   ;; to, written out.
+   (do
+     (def Predicate__impls (flint.rt/atom {}))
+     (def Predicate
+       "How a value tests and describes itself.
 
   `check` must be cheap and allocation-free on success -- it is called on every
   checked call. `explain` is called only after `check` has already said no, so
@@ -93,10 +106,20 @@
   Both take the arguments as a VECTOR, because `expect` is variadic: `(expect =
   a b)` and `(expect between? x lo hi)` are ordinary uses, and a protocol whose
   hooks took a single value could not express them."
-     (check [p args] "Truthy if `args` pass.")
-     (explain [p args]
+       (hash-map :flint/protocol 'flint.check/Predicate
+                 :impls Predicate__impls
+                 :method-keys '[flint.check/check flint.check/explain]))
+     (defn check
+       "Truthy if `args` pass."
+       [p args]
+       (let [f (find-protocol-method Predicate__impls 'flint.check/check p)]
+         (if f (f p args) (flint.protocols/protocol-miss 'flint.check/Predicate 'flint.check/check p))))
+     (defn explain
        "Why `args` failed, as data: `{:expected .. :actual .. :note ..}`. Any
-       key may be absent; `expect` renders what it is given."))
+       key may be absent; `expect` renders what it is given."
+       [p args]
+       (let [f (find-protocol-method Predicate__impls 'flint.check/explain p)]
+         (if f (f p args) (flint.protocols/protocol-miss 'flint.check/Predicate 'flint.check/explain p)))))
    :default
    (do
      (defn check
@@ -109,21 +132,8 @@
        [p args]
        (throw (ex-info "checks are not enabled in this build" {})))))
 
-;; AN ORDINARY FUNCTION IS A PREDICATE, and this is the whole of that case: it
-;; is applied, and that is all a bare function can offer. It is also the case
-;; that has to work, because a predicate is a VALUE and may arrive from
-;; anywhere -- `(let [p =] (expect p 1 2))` has nothing for a macro to
-;; recognise, so nothing may depend on recognising it.
-;;
-;; A function CAN do better than this default, because a closure carries
-;; metadata: attach `'flint.check/explain` and dispatch finds it before it
-;; falls back to kind. That is why `with-meta` on a function had to start
-;; working before any of this was worth writing.
 #?(:flint/check
-   (extend-protocol Predicate
-     :fn (check [f args] (apply f args))))
-
-;; ------------------------------------------------------------- rendering
+   (flint.protocols/extend-method Predicate :fn "check" (fn [f args] (apply f args))))
 
 #?(:flint/check
    (defn- join-lines [xs]
@@ -174,9 +184,14 @@
   run time.
 
   Only makes sense while checking; the OFF variant throws."
-  [{:keys [file line column in pred-src arg-src pred-col arg-col]} explanation args]
+  [site explanation args]
+  ;; NO DESTRUCTURING: it expands into `clojure.core/get`, and this namespace
+  ;; refers nothing of `clojure.core` (`DECISIONS.md#four-units`).
   #?(:flint/check
-     (let [{:keys [expected note]} explanation
+     (let [file (:file site) line (:line site) column (:column site) in (:in site)
+           pred-src (:pred-src site) arg-src (:arg-src site)
+           pred-col (:pred-col site) arg-col (:arg-col site)
+           expected (:expected explanation) note (:note explanation)
            head (str "check failed" (when in (str " in " in)))
            where (str "  " file ":" line (when column (str ":" column)))
            form (str "  " pred-src " " arg-src)
@@ -249,11 +264,16 @@
                  :arg-src (flint.rt/str-join (vec (interpose " " (map pr-str args))))
                  :pred-col (col-of 1 pred)
                  :arg-col (col-of 2 (first args))}]
+       ;; BUILTINS, NOT `clojure.core`, in what lands in the caller: the
+       ;; expansion must mean the same in a namespace that refers nothing of
+       ;; `clojure.core` (`DECISIONS.md#four-units`), and `clojure.core/first`
+       ;; and `ex-info` are these two builtins with a var around them.
+       ;; `clojure.core/let` is the BOOTSTRAP `let`, resolved before any var is.
        (list 'clojure.core/let ['p# pred 'a# (vec args)]
              (list 'if (list 'flint.check/check 'p# 'a#)
-                   (list 'clojure.core/first 'a#)
+                   (list 'flint.rt/first 'a#)
                    (list 'throw
-                         (list 'clojure.core/ex-info
+                         (list 'flint.rt/ex-info
                                (list 'flint.check/failure-message
                                      site
                                      (list 'flint.check/describe 'p# 'a# (:pred-src site))

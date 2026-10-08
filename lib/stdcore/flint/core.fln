@@ -21,10 +21,11 @@
 
   The protocol machinery is `flint.protocols`, not this."
 
-  ;; No `:require` of `clojure.core`: it is referred everywhere already, and
-  ;; naming it would make a require CYCLE with `clojure.core`'s own require of
-  ;; this namespace -- the shape `flint.regex` and `flint.protocols` have.
-  )
+  ;; stdcore REFERS NOTHING OF `clojure.core` (`DECISIONS.md#four-units`): it is
+  ;; in every image, `clojure.core` is a library only the namespaces referring it
+  ;; reach, and what this needs of it lives in `flint.core.impl`.
+  (:refer-clojure :only [])
+  (:require [flint.core.impl :refer :all]))
 ;; ------------------------------------------------------------------ strings
 ;;
 ;; The runtime reached directly. Clojure gets the same reach through Java
@@ -49,7 +50,7 @@
 
 (defn sb-append! [sb s] (vswap! sb conj s) sb)
 
-(defn sb-str [sb] (flint.rt/str-join @sb))
+(defn sb-str [sb] (flint.rt/str-join (deref sb)))
 
 
 ;; ------------------------------------------------------------------- opaque

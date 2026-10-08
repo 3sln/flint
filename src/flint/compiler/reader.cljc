@@ -1,4 +1,4 @@
-(ns flint.compiler.reader
+(ns ^:internal flint.compiler.reader
   "The Clojure reader: source text to data.
 
   flint reads its own source rather than borrowing the host's reader. That is

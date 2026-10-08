@@ -1,4 +1,4 @@
-(ns flint.compiler.jar
+(ns ^:internal flint.compiler.jar
   "A ZIP writer in flint, for the `:to :jvm` target.
 
   A JAR is a ZIP and nothing else, and a ZIP entry may be **STORED** -- the

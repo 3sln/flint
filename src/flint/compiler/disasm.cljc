@@ -1,4 +1,4 @@
-(ns flint.compiler.disasm
+(ns ^:internal flint.compiler.disasm
   "Bytecode disassembler. Written because 'it takes the wrong branch' is not a
   bug you can reason your way out of -- you have to look at the instructions."
   (:require [flint.compiler.emitter :as emit]

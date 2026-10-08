@@ -1,0 +1,872 @@
+(ns ^:internal flint.core.impl
+  "What stdcore needs of `clojure.core`, so that stdcore needs nothing of it
+  (`DECISIONS.md#four-units`, `DECISIONS.md#defalias`).
+
+  stdcore -- `flint.port`, `flint.wire`, `flint.protocols`, `flint.core`,
+  `flint.check` and this namespace -- is in every image whatever a host's
+  resolver offers, and `clojure.core` is a LIBRARY now, reached only by the
+  namespaces that refer it. So the vars stdcore calls live here, and
+  `clojure.core` publishes them under their public names with `defalias`:
+  `clojure.core/seq` IS `flint.core.impl/seq`, a second name for one var, and a
+  call through either compiles to the same code.
+
+  WHAT IS HERE is exactly the closure of what those five namespaces name, taken
+  through `clojure.core`'s own text -- re-derive it rather than extend it by
+  hand: a var added here that stdcore does not need is a var a program
+  without `clojure.core` carries for nothing. Moved verbatim, with four kinds
+  of edit and no others:
+
+  * `defn-` became `defn`. This namespace is `^:internal`, so an unmarked var
+    is WORKSPACE-local (`DECISIONS.md#namespace-is-workspace-local`), which
+    `clojure.core` -- in the same workspace -- needs in order to keep calling
+    the helpers it used to own.
+  * `cond`, `and` and `or` expand all the way in one step, and `doseq` walks
+    with builtins: their expansions used to name `clojure.core/cond` and
+    friends, which a namespace that refers nothing of `clojure.core` cannot
+    resolve.
+  * `@x` is written `(deref x)`: the reader spells `@` as `clojure.core/deref`.
+  * `pr-str*` names `flint.core`'s `tag`/`form`/`opaque?`/`opaque-label`
+    qualified rather than through a refer, because `flint.core` requires THIS
+    namespace and a refer would be a require cycle.
+
+  It names `flint.protocols` and `flint.core` QUALIFIED and requires neither,
+  for the same reason: both require it. Both are always in the program
+  (`flint.port` and `flint.wire` are roots and require `flint.protocols`), and
+  a qualified name resolves without a `:require`."
+  (:refer-clojure :only []))
+
+;; `:flint/result-inverts` tells the analyzer that everything known from `x` being
+;; truthy applies to the OTHER branch of a test on `(not x)`, so occurrence
+;; narrowing crosses a negation intact.
+(defn ^{:flint/result-inverts x} not [x] (if x false true))
+
+(defn nil? [x] (flint.rt/nil? x))
+(defn some? [x] (if (flint.rt/nil? x) false true))
+(defn true? [x] (flint.rt/identical? x true))
+(defn false? [x] (flint.rt/identical? x false))
+(defn boolean [x] (if x true false))
+
+(defn =
+  ([a] true)
+  ([a b] (flint.rt/= a b))
+  ([a b & more] (if (flint.rt/= a b)
+                  (loop [prev b s (flint.rt/seq more)]
+                    (if s
+                      (if (flint.rt/= prev (flint.rt/first s))
+                        (recur (flint.rt/first s) (flint.rt/next s))
+                        false)
+                      true))
+                  false)))
+(defn not=
+  ([a] false)
+  ([a b] (not (flint.rt/= a b)))
+  ([a b & more] (not (apply2 = (cons a (cons b more))))))
+
+(defn first [coll] (flint.rt/first coll))
+(defn rest [coll] (flint.rt/rest coll))
+(defn next [coll] (flint.rt/next coll))
+(defn seq [coll] (flint.rt/seq coll))
+(defn cons [x coll] (flint.rt/cons x coll))
+(defn count [coll] (flint.rt/count coll))
+(defn name [x] (flint.rt/name x))
+(defn namespace [x] (flint.rt/namespace x))
+(defn meta [x] (flint.rt/meta x))
+(defn with-meta [x m] (flint.rt/with-meta x m))
+(defn atom [x] (flint.rt/atom x))
+(defn deref [x] (flint.rt/deref x))
+(defn reset! [a v] (flint.rt/reset! a v))
+(defn compare-and-set!
+  "Set the atom to `new` only if it still holds `old`, by identity. True when
+  it did. The primitive `swap!` retries on."
+  [a old nv] (flint.rt/compare-and-set! a old nv))
+(defn ex-message [e] (flint.rt/ex-message e))
+
+(defn transient [c] (flint.rt/transient c))
+(defn persistent! [c] (flint.rt/persistent! c))
+(defn conj! [c x] (flint.rt/conj! c x))
+(defn assoc! [c k v] (flint.rt/assoc! c k v))
+
+(defn list [& xs] (if (nil? xs) '() xs))
+
+(defn kind-explain
+  "An explanation for a type predicate: what was wanted, and what arrived.
+
+  `flint.check`'s `Predicate` protocol dispatches on `(meta value)`, and a
+  `defn`'s metadata lands on the VAR -- so `:flint/value-meta` is what puts it
+  on the function itself. There is no registry of known predicates anywhere,
+  which is what lets a predicate held in a local explain itself as well as a
+  literal one does.
+
+  Written as a function rather than a macro because a macro that expands to a
+  `def` defines a var this compiler never records: names are collected before
+  any macro is evaluated. See `def-form-names`.
+
+  Every call site is inside `#?(:flint/check ...)`, and that is MEASURED rather
+  than tidy: attaching these fifteen explanations unconditionally cost 3 578
+  bytes in a module that calls none of them (264 941 against 261 363, a pure
+  `(defn main [_] \"nothing\")`). `DECISIONS.md#checks` says a check costs
+  nothing in the build that ships, and metadata that ships is a cost -- so the
+  reader removes the map and `m-defn` emits no `with-meta` at all."
+  [expected]
+  (fn [_ args]
+    {:expected expected
+     :note (flint.rt/str-join
+            ["got " (flint.rt/name (flint.rt/kind (flint.rt/nth args 0)))])}))
+
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a number")}
+                             :default nil)}
+  number? [x] (flint.rt/number? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "an integer")}
+                             :default nil)}
+  int? [x] (flint.rt/int? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a string")}
+                             :default nil)}
+  string? [x] (flint.rt/string? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a keyword")}
+                             :default nil)}
+  keyword? [x] (flint.rt/keyword? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a symbol")}
+                             :default nil)}
+  symbol? [x] (flint.rt/symbol? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a vector")}
+                             :default nil)}
+  vector? [x] (flint.rt/vector? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a map")}
+                             :default nil)}
+  map? [x] (flint.rt/map? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a set")}
+                             :default nil)}
+  set? [x] (flint.rt/set? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a seq")}
+                             :default nil)}
+  seq? [x] (flint.rt/seq? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a list")}
+                             :default nil)}
+  list? [x] (flint.rt/seq? x))
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "something sequential")}
+                             :default nil)}
+  sequential? [x] (flint.rt/sequential? x))
+
+(defn apply2 [f args] (flint.rt/apply f args))
+
+(defn second [coll] (flint.rt/first (flint.rt/next coll)))
+(defn nnext [coll] (flint.rt/next (flint.rt/next coll)))
+(defn empty? [coll] (nil? (flint.rt/seq coll)))
+
+(defn inc [n] (flint.rt/add n 1))
+(defn dec [n] (flint.rt/sub n 1))
+(defn pos? [n] (flint.rt/gt n 0))
+(defn neg? [n] (flint.rt/lt n 0))
+
+;; ------------------------------------------------------------ the first macros
+;;
+;; `lazy-seq` cannot use syntax quote, because syntax quote expands into calls
+;; to `concat`/`list`/`seq` and `concat` is itself built on `lazy-seq`. It is
+;; written with plain `list`/`cons` to break that knot; everything after it can
+;; use syntax quote freely.
+
+(defmacro lazy-seq [& body]
+  (list 'flint.rt/lazy-seq (cons 'fn* (cons [] body))))
+
+(defmacro if-not
+  ([test then] (list 'if test nil then))
+  ([test then else] (list 'if test else then)))
+
+;; `cond`, `and` and `or` EXPAND ALL THE WAY in one step, rather than into a
+;; call on `clojure.core/cond` for the rest. That is the same tree a re-expansion
+;; reached, and it names no var: these three are used by stdcore, which refers
+;; nothing of `clojure.core` (`DECISIONS.md#four-units`), and by every program,
+;; which may refer it or not.
+(defn cond-form [clauses]
+  (when clauses
+    (list 'if (first clauses)
+          (if (next clauses)
+            (second clauses)
+            (throw (ex-info "cond requires an even number of forms" {})))
+          (cond-form (nnext clauses)))))
+
+(defmacro cond [& clauses] (cond-form clauses))
+
+(defn and-form [x more]
+  (if more
+    (list 'let* ['and__x x]
+          (list 'if 'and__x (and-form (first more) (next more)) 'and__x))
+    x))
+
+(defmacro and
+  ([] true)
+  ([x] x)
+  ([x & more] (and-form x more)))
+
+(defn or-form [x more]
+  (if more
+    (list 'let* ['or__x x]
+          (list 'if 'or__x 'or__x (or-form (first more) (next more))))
+    x))
+
+(defmacro or
+  ([] nil)
+  ([x] x)
+  ([x & more] (or-form x more)))
+
+;; ------------------------------------------------------------------ sequences
+
+(defn concat
+  ([] nil)
+  ([x] (lazy-seq x))
+  ([x y] (lazy-seq
+          (let [s (seq x)]
+            (if s (cons (first s) (concat (rest s) y)) (seq y)))))
+  ;; FOLDED, not nested. `(concat y (apply concat more))` recurses once per
+  ;; argument before any of it is realised, which is a frame per argument.
+  ([x y & more] (reduce (fn [a b] (concat a b)) (concat x y) more)))
+
+(defn apply
+  ([f args] (flint.rt/apply f args))
+  ([f a args] (flint.rt/apply f (cons a args)))
+  ([f a b args] (flint.rt/apply f (cons a (cons b args))))
+  ([f a b c args] (flint.rt/apply f (cons a (cons b (cons c args)))))
+  ([f a b c d & more]
+   (flint.rt/apply f (cons a (cons b (cons c (cons d (spread more))))))))
+
+(defn spread [args]
+  (cond (nil? args) nil
+        (nil? (next args)) (seq (first args))
+        :else (cons (first args) (spread (next args)))))
+
+;; INDEXABLE INPUT WALKS BY INDEX. `rest` on a vector's seq allocates a fresh
+;; vecseq cell per element, so mapping a vector cost three allocations an
+;; element -- the vecseq, the lazy-seq and the cons -- to walk something that
+;; answers `nth` directly.
+;;
+;; NO `^int` ANNOTATIONS HERE, and that is not an oversight. `map2` is
+;; evaluated at COMPILE time by the macros defined above it, an annotation
+;; pulls in the type checker, and the checker wants `check-tag` -- which the
+;; compiler cannot resolve. `reduce` below can annotate because nothing above
+;; it calls `reduce`.
+(defn map-over-vec [f v i n]
+  (lazy-seq
+    (if (flint.rt/lt i n)
+      (cons (f (flint.rt/nth v i)) (map-over-vec f v (flint.rt/add i 1) n))
+      nil)))
+
+(defn map2
+  "Two-argument map over one collection, defined before `map` so that macros
+  above can use it."
+  [f coll]
+  (if (flint.rt/vector? coll)
+    (map-over-vec f coll 0 (count coll))
+    (let [cv (flint.rt/coll-vec coll)]
+      (if (nil? cv)
+        (lazy-seq (let [s (seq coll)]
+                    (when s (cons (f (first s)) (map2 f (rest s))))))
+        (map-over-vec f cv 0 (count cv))))))
+
+(defn reduce
+  ([f coll] (let [s (seq coll)]
+              (if s (reduce f (first s) (rest s)) (f))))
+  ([f init coll]
+   ;; A vector is walked BY INDEX. The general road is `seq`/`first`/`next`,
+   ;; and it allocates a seq step PER ELEMENT -- measured at 1.0 allocations
+   ;; per element on `bench/progs/colls.cljc`, for a walk that produces no
+   ;; value anyone keeps. Wall-clock barely sees it in a run that collects
+   ;; twice; a nursery does, and so does a 128 MiB isolate.
+   ;;
+   ;; This is not one function getting faster: `mapv`, `filterv`, `into`,
+   ;; `run!`, `some`, `every?`, `frequencies` and `group-by` all go through
+   ;; here. The annotations are free -- `count` declares itself an integer and
+   ;; the counter starts at a literal, so both are PROVEN and no check is
+   ;; emitted, while the comparison and the increment become inline opcodes.
+   (if (vector? coll)
+     (reduce-indexed f init coll)
+     ;; A MAP OR SET WALKS BY INDEX TOO. Its entries are already a vector --
+     ;; `seq` builds one and wraps it in a vecseq -- so going through the seq
+     ;; allocated a cell per entry to walk something indexable. `coll-vec`
+     ;; hands back the vector `seq` would have wrapped.
+     (let [cv (flint.rt/coll-vec coll)]
+       (if (nil? cv)
+         (reduce-seq f init coll)
+         (reduce-indexed f init cv)))))) 
+
+(defn reduce-indexed [f init coll]
+  (let [^int n (count coll)]
+    (loop [acc init ^int i 0]
+      (if (flint.rt/lt i n)
+        (let [acc' (f acc (flint.rt/nth coll i))]
+          (if (reduced? acc') (nth acc' 0) (recur acc' (flint.rt/add i 1))))
+        acc))))
+
+(defn reduce-seq
+  "`reduce` over anything that is not indexed."
+  [f init coll]
+  (loop [acc init s (seq coll)]
+     (if s
+       (let [acc' (f acc (first s))]
+         ;; `nth`, not `deref`. A `reduced` is a one-element vector carrying a
+         ;; marker in its metadata, and `deref` knows about atoms, volatiles and
+         ;; delays -- so every short-circuiting `reduce` raised
+         ;; `cannot deref this value`, and nothing in the suite had ever taken
+         ;; that branch.
+        (if (reduced? acc') (nth acc' 0) (recur acc' (next s))))
+      acc)))
+(defn reduced? [x] (if (vector? x) (boolean (:flint/reduced (meta x))) false))
+
+(defn into
+  ([to from]
+   (if (nil? from)
+     to
+     (if (or (vector? to) (map? to) (set? to))
+       (persistent! (reduce conj! (transient to) from))
+       (reduce conj to from)))))
+
+;; A MAP AND A SET ALREADY HAVE THIS VECTOR. `seq` builds an entry vector and
+;; wraps it in a vecseq, so `(into [] m)` walked that vecseq and rebuilt the
+;; same vector through a transient -- the work twice, and measurably: routing
+;; `reduce` over a map through `(vec m)` was SLOWER than the seq path, which is
+;; what pointed at this.
+(defn vec [coll]
+  (if (vector? coll)
+    coll
+    (let [cv (flint.rt/coll-vec coll)]
+      (if (nil? cv) (into [] coll) cv))))
+
+(defn hash-map [& kvs]
+  (loop [m {} s (seq kvs)]
+    (if s (recur (assoc m (first s) (second s)) (nnext s)) m)))
+
+(defn conj
+  ([coll] coll)
+  ([coll x] (flint.rt/conj coll x))
+  ([coll x & more] (reduce flint.rt/conj (flint.rt/conj coll x) more)))
+
+(defn assoc
+  ([m k v] (flint.rt/assoc m k v))
+  ([m k v & more]
+   (loop [m (flint.rt/assoc m k v) s (seq more)]
+     (if s (recur (flint.rt/assoc m (first s) (second s)) (nnext s)) m))))
+
+(defn get
+  ([m k] (flint.rt/get m k))
+  ([m k not-found] (flint.rt/get m k not-found)))
+
+(defn nth
+  ([coll i] (flint.rt/nth coll i))
+  ([coll i not-found] (flint.rt/nth coll i not-found)))
+
+;; ----------------------------------------------------------------- arithmetic
+
+(defn +
+  ([] 0) ([a] a) ([a b] (flint.rt/add a b))
+  ([a b & more] (reduce flint.rt/add (flint.rt/add a b) more)))
+(defn -
+  ;; ONE ARGUMENT, not `(sub 0 a)`. The runtime routes a one-argument `sub`
+  ;; to its negation, and subtracting from zero LOSES NEGATIVE ZERO: IEEE 754
+  ;; says 0.0 - 0.0 is +0.0, so `(- 0.0)` answered 0.0 where Clojure answers
+  ;; -0.0. All three runtimes already had the one-argument path; nothing
+  ;; called it.
+  ([a] (flint.rt/sub a)) ([a b] (flint.rt/sub a b))
+  ([a b & more] (reduce flint.rt/sub (flint.rt/sub a b) more)))
+(defn *
+  ([] 1) ([a] a) ([a b] (flint.rt/mul a b))
+  ([a b & more] (reduce flint.rt/mul (flint.rt/mul a b) more)))
+
+(defn cmp-chain [f a b more]
+  (if (f a b)
+    (loop [prev b s (seq more)]
+      (if s (if (f prev (first s)) (recur (first s) (next s)) false) true))
+    false))
+
+(defn < ([a] true) ([a b] (flint.rt/lt a b)) ([a b & more] (cmp-chain flint.rt/lt a b more)))
+(defn > ([a] true) ([a b] (flint.rt/gt a b)) ([a b & more] (cmp-chain flint.rt/gt a b more)))
+(defn max ([a] a) ([a b] (if (flint.rt/gt a b) a b))
+  ([a b & more] (reduce max (max a b) more)))
+
+;; -------------------------------------------------------------------- strings
+
+(defn kw-or-sym-str [x]
+  (let [n (flint.rt/name x) ns (flint.rt/namespace x)]
+    (if ns (flint.rt/str2 ns (flint.rt/str2 "/" n)) n)))
+
+(defn str
+  ([] "")
+  ([x] (cond
+         (nil? x) ""
+         (string? x) x
+         ;; THE SPECIALS ARE SPELLED TWICE IN CLOJURE, and this is the
+         ;; branch that gets the HOST spelling: `(str ##Inf)` is "Infinity",
+         ;; while `(pr-str ##Inf)` and `(str [##Inf])` are both "##Inf" --
+         ;; inside a collection it is the PRINTER that runs, and the printer
+         ;; keeps the readable name in both of its modes.
+         ;;
+         ;; So the mapping belongs on this branch and not in `num->str`,
+         ;; which the printer shares. Comparing the answer rather than
+         ;; testing the number keeps one source of truth for the three
+         ;; names, and costs a length check for every ordinary number.
+         (number? x) (let [s (flint.rt/num->str x)]
+                       (cond
+                         (= s "##Inf") "Infinity"
+                         (= s "##-Inf") "-Infinity"
+                         (= s "##NaN") "NaN"
+                         :else s))
+         (keyword? x) (flint.rt/str2 ":" (kw-or-sym-str x))
+         (symbol? x) (kw-or-sym-str x)
+         (true? x) "true"
+         (false? x) "false"
+         :else (pr-str x)))
+  ([x & more] (loop [acc (str x) s (seq more)]
+                (if s (recur (flint.rt/str2 acc (str (first s))) (next s)) acc))))
+
+(defn check-subs
+  "Throw a substring range error that says which end was wrong, and by how much."
+  [who s start end]
+  (let [n (count s)]
+    (cond
+      (not (string? s))
+      (throw (ex-info (str who " wants a string, got " (name (flint.rt/kind s)))
+                      {:actual s}))
+      (not (int? start))
+      (throw (ex-info (str who " start must be an integer, got "
+                           (name (flint.rt/kind start)))
+                      {:start start}))
+      (not (int? end))
+      (throw (ex-info (str who " end must be an integer, got "
+                           (name (flint.rt/kind end)))
+                      {:end end}))
+      (neg? start)
+      (throw (ex-info (str who " start is negative: " start)
+                      {:start start :end end :length n}))
+      (> end n)
+      (throw (ex-info (str who " end is " end ", past the end of a string of "
+                           n " character" (if (= n 1) "" "s"))
+                      {:start start :end end :length n}))
+      (> start end)
+      (throw (ex-info (str who " start " start " is past its end " end)
+                      {:start start :end end :length n}))
+      :else nil)))
+
+(defn subs
+  ;; The check names the NUMBERS. `bad substring range` is true and useless:
+  ;; the two things a reader needs are which end was out and what the length
+  ;; actually was, and both are right here and gone by the time it throws.
+  ;;
+  ;; Written as a `throw` rather than as `flint.check/expect`, and that is a
+  ;; hard constraint rather than a style: `clojure.core` is compiled BEFORE
+  ;; `flint.check` -- it has to be, since `flint.check` is written in this
+  ;; language -- so nothing in this file can name it. What the check branch
+  ;; buys here is the same thing it buys anywhere: under `:optimize [perf]`
+  ;; the reader deletes it and the call is the raw builtin again.
+  ([s start]
+   #?(:flint/check (check-subs "subs" s start (count s)))
+   (flint.rt/subs s start))
+  ([s start end]
+   #?(:flint/check (check-subs "subs" s start end))
+   (flint.rt/subs s start end)))
+
+(defn keyword
+  ([n] (if (keyword? n) n (flint.rt/keyword2 n)))
+  ([ns n] (flint.rt/keyword2 ns n)))
+(defn symbol
+  ([n] (if (symbol? n) n (flint.rt/symbol2 n)))
+  ([ns n] (flint.rt/symbol2 ns n)))
+
+(defn tagged-literal
+  "`#my.ns/thing form`, as a value.
+
+  Its own type rather than a map (`DECISIONS.md#tagged-literals`): a map is ambiguous
+  with a map in every format that has tags, and loses the namespace wherever
+  the key has to become a string. It still READS like a two-key map on `:tag`
+  and `:form`, so nothing treating one as a map needs a different way in."
+  [tag form]
+  (flint.rt/tagged-literal tag form))
+
+(defn tagged-literal? [x] (flint.rt/tagged-literal? x))
+(defn int [x] (flint.rt/to-long x))
+
+(defn seq-binding-form [pairs inner leaf]
+  ;; Shared shape for `doseq` and `for`: fold the binding pairs right to left,
+  ;; so later bindings nest inside earlier ones and :let/:when/:while apply from
+  ;; the point they appear, as in Clojure.
+  (reduce (fn [acc pair]
+            (let [b (first pair) v (second pair)]
+              (cond
+                (= b :let) (list 'clojure.core/let v acc)
+                (= b :when) (list 'if v acc nil)
+                (= b :while) (list 'if v acc nil)
+                :else (inner b v acc))))
+          leaf
+          (reverse pairs)))
+
+(defmacro doseq [bindings & body]
+  (seq-binding-form
+   (partition 2 bindings)
+   (fn [b v acc]
+     (let [g (gensym "doseq")]
+       ;; BUILTINS for the walk, for the reason `cond` expands all the way:
+       ;; `clojure.core/seq`, `first` and `next` are these with a var around
+       ;; them. `clojure.core/let` is the bootstrap `let`.
+       (list 'loop* [g (list 'flint.rt/seq v)]
+             (list 'if g
+                   (list 'do
+                         (list 'clojure.core/let [b (list 'flint.rt/first g)] acc)
+                         (list 'recur (list 'flint.rt/next g)))
+                   nil))))
+   (cons 'do body)))
+
+;; ---------------------------------------------------------- higher order fns
+
+(defn map
+  ([f coll] (map2 f coll))
+  ([f c1 c2] (lazy-seq (let [s1 (seq c1) s2 (seq c2)]
+                         (when (and s1 s2)
+                           (cons (f (first s1) (first s2))
+                                 (map f (rest s1) (rest s2))))))))
+
+(defn mapcat2
+  "Lazily, one element at a time.
+
+  Not `(apply concat (map f coll))`, which is what this was. That applies
+  `concat` to as many arguments as there are elements, and `concat`'s variadic
+  arity recurses once per argument -- so `for` over six hundred items built six
+  hundred nested frames and came apart inside `apply`, with a bounds check in
+  `enter` on a function index that had been walked over. Three items worked."
+  [f coll]
+  (lazy-seq
+   (let [s (seq coll)]
+     (when s
+       (concat (f (first s)) (mapcat2 f (rest s)))))))
+
+;; INDEXABLE INPUT WALKS BY INDEX, for the reason `map-over-vec` gives -- and
+;; a run of elements that fail the predicate is skipped in a LOOP, so dropping
+;; a thousand in a row costs one thunk and not a thousand.
+(defn filter-over-vec [pred v i n]
+  (lazy-seq
+    (loop [j i]
+      (if (flint.rt/lt j n)
+        (let [x (flint.rt/nth v j)]
+          (if (pred x)
+            (cons x (filter-over-vec pred v (flint.rt/add j 1) n))
+            (recur (flint.rt/add j 1))))
+        nil))))
+
+(defn filter [pred coll]
+  (if (flint.rt/vector? coll)
+    (filter-over-vec pred coll 0 (count coll))
+    (let [cv (flint.rt/coll-vec coll)]
+      (if (nil? cv)
+        (lazy-seq (let [s (seq coll)]
+                    (when s
+                      (if (pred (first s))
+                        (cons (first s) (filter pred (rest s)))
+                        (filter pred (rest s))))))
+        (filter-over-vec pred cv 0 (count cv))))))
+
+(defn remove [pred coll] (filter (fn [x] (not (pred x))) coll))
+
+(defn take [n coll]
+  (lazy-seq (when (pos? n)
+              (let [s (seq coll)]
+                (when s (cons (first s) (take (dec n) (rest s))))))))
+
+;; EMPTY IS `()`, NOT nil. `seq` answers nil when it runs out, and returning
+;; that straight through made `(drop 3 [1 2])` nil where Clojure gives `()`.
+;; `interpose` is built on this one and inherited it.
+(defn drop [n coll]
+  (loop [n n s (seq coll)]
+    (if (and (pos? n) s) (recur (dec n) (next s)) (if s s (list)))))
+
+(defn range
+  ([] (flint.rt/range3 0 nil 1))
+  ([end] (flint.rt/range3 0 end 1))
+  ([start end] (flint.rt/range3 start end 1))
+  ([start end step] (flint.rt/range3 start end step)))
+
+(defn repeat2 [n x] (take n (repeat-forever x)))
+(defn repeat-forever [x] (lazy-seq (cons x (repeat-forever x))))
+(defn repeat
+  ([x] (repeat-forever x))
+  ([n x] (repeat2 n x)))
+
+(defn interpose [sep coll]
+  (drop 1 (mapcat (fn [x] (list sep x)) coll)))
+
+(defn mapcat
+  ([f coll] (mapcat2 f coll))
+  ([f c1 c2] (lazy-seq
+              (let [s (seq (map f c1 c2))]
+                (when s (concat (first s) (mapcat (fn [x] x) (rest s))))))))
+(defn some [pred coll]
+  (loop [s (seq coll)] (when s (let [v (pred (first s))] (if v v (recur (next s)))))))
+
+(defn reverse [coll] (reduce (fn [acc x] (cons x acc)) '() coll))
+
+(defn swap!
+  "Apply `f` to the atom's value and store the result, retrying if someone else
+  got there first.
+
+  A RETRY LOOP over `compare-and-set!`, not `(reset! a (f (deref a)))`. A
+  read-modify-write loses updates the moment two threads are inside it at once,
+  and loses them silently -- the counter is simply smaller than it should be.
+  That was unreachable while one thread ran a sandbox and became reachable the
+  day two could (`DECISIONS.md#drivers`).
+
+  `f` may therefore run more than once, which is the same contract Clojure
+  gives and the reason it wants a pure function."
+  ([a f]
+   (loop [] (let [old (deref a) nv (f old)]
+              (if (compare-and-set! a old nv) nv (recur)))))
+  ([a f x]
+   (loop [] (let [old (deref a) nv (f old x)]
+              (if (compare-and-set! a old nv) nv (recur)))))
+  ([a f x y]
+   (loop [] (let [old (deref a) nv (f old x y)]
+              (if (compare-and-set! a old nv) nv (recur)))))
+  ([a f x y & more]
+   (loop [] (let [old (deref a)
+                  nv (apply2 f (cons old (cons x (cons y more))))]
+              (if (compare-and-set! a old nv) nv (recur))))))
+
+(defn ex-info
+  ([msg] (flint.rt/ex-info msg nil))
+  ([msg data] (flint.rt/ex-info msg data))
+  ([msg data cause] (flint.rt/ex-info msg data cause)))
+(defn key [e] (flint.rt/nth e 0))
+(defn val [e] (flint.rt/nth e 1))
+
+(defn merge [& maps]
+  ;; ONE transient across every source, not one per source. A transient made
+  ;; from an existing map inherits that map's nodes, so the first write to each
+  ;; path still copies it -- which is why merging two maps measured exactly the
+  ;; same either way. The saving is on nodes the session itself created, so it
+  ;; appears from the second source map onward, and only if the transient
+  ;; survives that long.
+  (let [ms (remove nil? maps)]
+    (if (nil? (seq ms))
+      nil
+      (persistent!
+       (reduce (fn [m b] (reduce (fn [m e] (assoc! m (key e) (val e))) m b))
+               (transient (first ms)) (rest ms))))))
+
+(defn update
+  ([m k f] (assoc m k (f (get m k))))
+  ([m k f a] (assoc m k (f (get m k) a)))
+  ([m k f a b] (assoc m k (f (get m k) a b)))
+  ([m k f a b & more] (assoc m k (apply2 f (cons (get m k) (cons a (cons b more)))))))
+
+(defn check-partition [who n step]
+  (cond
+    (not (int? n))
+    (throw (ex-info (str who " size must be an integer, got " (name (flint.rt/kind n)))
+                    {:n n}))
+    (not (pos? n))
+    ;; `(partition 0 coll)` took nothing, found nothing missing, dropped
+    ;; nothing and recurred -- an infinite sequence of nils, produced silently
+    ;; and lazily, so the symptom appeared wherever it was finally realised
+    ;; rather than here.
+    (throw (ex-info (str who " size must be positive, got " n
+                         " -- a partition of " n " would never consume the "
+                         "collection and the sequence would not end")
+                    {:n n}))
+    (not (pos? step))
+    (throw (ex-info (str who " step must be positive, got " step
+                         " -- a step of " step " would not advance")
+                    {:step step}))
+    :else nil))
+
+(defn partition
+  ([n coll] (partition n n coll))
+  ([n step coll]
+   #?(:flint/check (check-partition "partition" n step))
+   (lazy-seq (let [s (seq coll)]
+               (when s
+                 (let [p (vec (take n s))]
+                   (when (= n (count p))
+                     (cons (seq p) (partition n step (drop step s))))))))))
+
+(defn mapv
+  ([f coll] (persistent! (reduce (fn [acc x] (conj! acc (f x))) (transient []) coll)))
+  ([f c1 c2] (vec (map f c1 c2))))
+
+(defn list*
+  ([args] (seq args))
+  ([a args] (cons a (seq args)))
+  ([a b args] (cons a (cons b (seq args))))
+  ([a b c args] (cons a (cons b (cons c (seq args))))))
+
+;; ------------------------------------------------------------------ printing
+
+(defn escape-string [s]
+  (loop [acc "\"" i 0]
+    (if (< i (count s))
+      (let [c (nth s i)]
+        (recur (flint.rt/str2 acc
+                              (cond (= c "\"") "\\\""
+                                    (= c "\\") "\\\\"
+                                    (= c "\n") "\\n"
+                                    (= c "\t") "\\t"
+                                    (= c "\r") "\\r"
+                                    :else c))
+               (inc i)))
+      (flint.rt/str2 acc "\""))))
+
+;; Two printers, one traversal. `pr` is READABLE -- a string comes back with its
+;; quotes -- and `print` is not. They differ in exactly one leaf case and are
+;; otherwise the same walk, so `readable?` rides along rather than the cond
+;; being written twice.
+;;
+;; It used to be one printer, with `print-str` and `println-str` calling the
+;; readable one. That is wrong at every level, not just the top: Clojure's
+;; `(print-str ["x" 1])` is `[x 1]`, and flint's was `["x" 1]`.
+
+(defn join-with* [sep xs readable?]
+  (loop [acc "" s (seq xs) first? true]
+    (if s
+      (recur (flint.rt/str2 (if first? acc (flint.rt/str2 acc sep))
+                            (pr-str* (first s) readable?))
+             (next s) false)
+      acc)))
+
+(defn join-entries* [m readable?]
+  (loop [acc "" s (seq m) first? true]
+    (if s
+      (let [e (first s)]
+        (recur (flint.rt/str2 (if first? acc (flint.rt/str2 acc ", "))
+                              (flint.rt/str2 (pr-str* (key e) readable?)
+                                             (flint.rt/str2 " " (pr-str* (val e) readable?))))
+               (next s) false))
+      acc)))
+
+(defn pr-str* [x readable?]
+  (cond
+    (nil? x) "nil"
+    (true? x) "true"
+    (false? x) "false"
+    (string? x) (if readable? (escape-string x) x)
+    (number? x) (flint.rt/num->str x)
+    (keyword? x) (flint.rt/str2 ":" (kw-or-sym-str x))
+    (symbol? x) (kw-or-sym-str x)
+    (vector? x) (flint.rt/str2 "[" (flint.rt/str2 (join-with* " " x readable?) "]"))
+    (set? x) (flint.rt/str2 "#{" (flint.rt/str2 (join-with* " " x readable?) "}"))
+    (map? x) (flint.rt/str2 "{" (flint.rt/str2 (join-entries* x readable?) "}"))
+    ;; No read syntax, deliberately: a value whose printed form can be read
+    ;; back is forgeable by construction (0022).
+    ;; Before the map branch, because a tagged literal READS like a map and
+    ;; would otherwise print as one.
+    (tagged-literal? x) (flint.rt/str2 "#" (flint.rt/str2 (kw-or-sym-str (flint.core/tag x))
+                                                          (flint.rt/str2 " " (pr-str* (flint.core/form x) readable?))))
+    (flint.core/opaque? x) (let [l (flint.core/opaque-label x)]
+                  (if (nil? l) "#<opaque>" (flint.rt/str2 "#<opaque " (flint.rt/str2 (pr-str* l false) ">"))))
+    (seq? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
+    (sequential? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
+    ;; Everything else asks the VALUE how it writes itself.
+    ;;
+    ;; The branches above are core's own types, and core knowing its own
+    ;; internals is not a coupling. Anything a LIBRARY adds is a different
+    ;; matter: a `(flint.rt/table? x)` here would mean the printer -- which
+    ;; every program links -- had to know about a type most programs never use,
+    ;; which is what a protocol exists to stop. `#flint/table` therefore lives
+    ;; in `flint.table` and arrives here as an implementation, so a program that
+    ;; never requires that namespace never carries the branch or the builtin
+    ;; behind it.
+    ;;
+    ;; TWO HOOKS, not one with a flag. Printing as DATA and printing for a
+    ;; PERSON are different jobs -- one has to read back, the other has to be
+    ;; legible -- and an implementation that branches on a boolean is two
+    ;; functions wearing one name. The split also means an implementation can
+    ;; supply only the data half, which is the common case, and `print-human`
+    ;; falls back to it.
+    ;;
+    ;; `printer-for` rather than the generated `print-data`, because a miss here
+    ;; is a FALLBACK and not an error: an unprintable value should print as one
+    ;; rather than throw out of `str`. Metadata is consulted first, which is
+    ;; `threads-and-ports`'s primary mechanism -- so one value can carry its own printer
+    ;; without its kind having one.
+    :else (let [f (flint.protocols/printer-for x readable?)]
+            (if f (f x) "#<unprintable>"))))
+
+(defn pr-str [x] (pr-str* x true))
+
+;; ---------------------------------------------------------------- volatiles
+;;
+;; A volatile is an atom without the ceremony; flint is single threaded, so the
+;; distinction is only about intent. The compiler leans on them heavily.
+
+(defn volatile! [x] (flint.rt/volatile x))
+
+;; --------------------------------------------------------- opaque values
+;;
+;; `DECISIONS.md#opaque-values`. Clojure's unique-sentinel idiom is `(Object.)` --
+;; how you tell ABSENT from present-and-nil, how a library gets a key nobody
+;; can collide with, how a protocol keeps a private marker. flint has no host
+;; classes, so it had no way to say it.
+
+
+(defn vswap!
+  ([v f] (flint.rt/reset! v (f (flint.rt/deref v))))
+  ([v f a] (flint.rt/reset! v (f (flint.rt/deref v) a)))
+  ([v f a b] (flint.rt/reset! v (f (flint.rt/deref v) a b)))
+  ([v f a b & more] (flint.rt/reset! v (apply2 f (cons (flint.rt/deref v) (cons a (cons b more)))))))
+
+;; -------------------------------------------------------------------- gensym
+;;
+;; Deterministic: the counter starts at 1 in every process. That is not just
+;; tidiness -- the self-hosting fixpoint test compares compiler output byte for
+;; byte, and a gensym that leaked into a constant would make two identical
+;; compilations differ.
+
+(def gensym-counter (atom 0))
+
+(defn gensym
+  ([] (gensym "G__"))
+  ([prefix] (reset! gensym-counter (inc (deref gensym-counter)))
+            (symbol (flint.rt/str2 (str prefix) (flint.rt/num->str (deref gensym-counter))))))
+
+;; --------------------------------------------------------------- protocols
+;;
+;; Protocols are the basis for polymorphism here, and they work differently from
+;; Clojure's for a reason that is not a shortcut: **flint has no types.** There
+;; is no deftype, no defrecord, no class. So "which type is this?" has no general
+;; answer, and dispatch has two roads:
+;;
+;; * **built-in kinds** -- a small closed set (`kind` below) covering nil,
+;;   booleans, numbers, strings, keywords, symbols, vectors, maps, sets, lists,
+;;   functions and ports;
+;; * **metadata** -- for everything a user defines, because there is nothing else
+;;   a user-defined abstraction can *be*. Clojure has this as
+;;   `extend-via-metadata`, opt-in and slightly out of the way. **Here it is the
+;;   main road**, and it is the one to reach for.
+;;
+;; A method attached by metadata is keyed by the method's fully-qualified
+;; SYMBOL, which is how Clojure's `extend-via-metadata` keys it -- so a syntax
+;; quote writes the key, and code that extends a protocol somebody else defined
+;; looks the same here as it does there:
+;;
+;;     (with-meta {:w 3 :h 4} {`shapes/area (fn [s] (* (:w s) (:h s)))})
+;;
+;; It was a KEYWORD until `clojure.datafy` was ported and the difference
+;; mattered: `datafy` exists to be extended by values from other libraries, and
+;; those libraries write the symbol. A keyword key was not a smaller spelling
+;; of the same thing, it was a key nobody else would ever write.
+;;
+;; Not everything can carry metadata: see `meta`'s note. Inline values -- short
+;; strings, keywords and chars, which live in the value word itself -- have
+;; nowhere to hang a map, and neither do numbers or functions. Those dispatch by
+;; kind, which is what kinds are for.
+
+
+(defn find-protocol-method
+  "The implementation of `mkey` (a fully-qualified SYMBOL) for `x`: metadata
+  first, then the protocol's table for `x`'s kind. `nil` when there is none.
+
+  A symbol, not a keyword, because that is how Clojure keys
+  `extend-via-metadata` — and a value carrying an implementation is the most
+  likely thing to arrive here from somebody else's library."
+  [impls mkey x]
+  (or (get (meta x) mkey)
+      (get (get (deref impls) (flint.rt/kind x)) mkey)))
+
+(defn extend
+  "Give `kind` (a keyword from `kind`) implementations of a protocol's methods.
+  `mmap` maps a method's fully-qualified keyword to a function."
+  [protocol kind mmap]
+  (swap! (:impls protocol) update kind merge mmap)
+  nil)

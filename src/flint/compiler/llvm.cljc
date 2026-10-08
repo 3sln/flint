@@ -1,4 +1,4 @@
-(ns flint.compiler.llvm
+(ns ^:internal flint.compiler.llvm
   "Bytecode to LLVM IR, one arity at a time (`DECISIONS.md#llvm-ir-target`).
 
   ## The same shape, aimed at a different target

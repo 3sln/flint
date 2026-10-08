@@ -115,6 +115,7 @@ this block.
 - [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
 - [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not in the original byte-identity proof above, and the entry that used to stand here was wrong.
 - [four-units](#four-units) -- The guest source flint ships is four units, each its own workspace in its own source root
+- [defalias](#defalias) -- `defalias`: a second name for one var, resolved at compile time, and only in a `.fln`
 <!-- TOC:END -->
 
 ---
@@ -2153,7 +2154,7 @@ plausible-looking cause, closed by the copy-small-slices rule above.
 
 The instinct to abandon regex for PEG is diagnosed as right in spirit and
 wrong in the specifics. flint's regex feature set is already the safe
-subset — `lib/stdcore/flint/regex.fln` refuses lookahead, lookbehind,
+subset — `lib/stdextra/flint/regex.fln` refuses lookahead, lookbehind,
 backreferences, and named groups, which is roughly RE2's subset and is
 exactly the subset matchable without backtracking at all. **The actual
 hazard is that the implementation is a backtracker regardless of the
@@ -2201,9 +2202,9 @@ reference and a native one — over a rope cursor. `re-pattern`, `re-find`,
 `re-matches`, `re-seq` all run on it; the catastrophic-backtracking case
 stays linear (measured: `(a+)+$` over 24 and 48 characters, 37 ms and 38 ms
 — i.e., not exponential). Verified 2026-09-12. All three parts exist:
-`lib/stdcore/flint/nfa.fln` (the shared compiler), `lib/stdextra/flint/pike.fln` (the cljc
+`lib/stdextra/flint/nfa.fln` (the shared compiler), `lib/stdextra/flint/pike.fln` (the cljc
 reference), and the native simulators — `runtime/src/pike.rs` plus the
-generated `Pike.java`/`Pike.cs` — which `lib/stdcore/flint/regex.fln` reaches through
+generated `Pike.java`/`Pike.cs` — which `lib/stdextra/flint/regex.fln` reaches through
 the `flint.rt/re-compile` and `flint.rt/re-run` builtins (l.295, 322, 333, 391),
 not through the cljc one. Observed through `target/release/flint run`:
 `re-find` with capture groups, `re-matches` matching and returning nil,
@@ -2721,6 +2722,13 @@ Existing `#?(:flint/check ...)` conditionals elsewhere keep working
 unchanged -- they still select check-only code at THEIR call sites -- this
 only removes the requirement that a reference to `flint.check` itself be
 inside one.
+
+*2026-10-08 (`DECISIONS.md#four-units`): `flint.check` refers nothing of
+`clojure.core` now -- it is stdcore, and `clojure.core` is not. Its `Predicate`
+protocol is written longhand (what `defprotocol`/`extend-protocol` expanded
+to), `failure-message` no longer destructures, and `expect` expands to
+`flint.rt/first`/`flint.rt/ex-info` rather than their `clojure.core` wrappers.
+The surface and both variants are unchanged (`bin/check-flint-check-surface`).*
 
 **Per name, by what it is and what the OFF build should cost:**
 
@@ -6414,7 +6422,7 @@ a static property of the graph.
 
 **Divergence has two scales, and the small one already works.** flint's reader
 carries `:features #{:flint}` (`src/flint/compiler/reader.cljc`), so `#?(:clj a :flint b)`
-reads today, and `lib/stdcore/clojure/core.fln` already uses conditionals in anger.
+reads today, and `lib/stdextra/clojure/core.fln` already uses conditionals in anger.
 
 * small divergence → a reader conditional inside one `.cljc`
 * wholesale divergence → a separate `.fln` implementation
@@ -6610,6 +6618,10 @@ restricted to `.fln` for the same reason this section restricts any
 flint-only surface; see `DECISIONS.md#namespaces-over-the-system-port`'s
 stdcore/stdextra part.
 
+*2026-10-08: built -- `defalias` refuses a namespace answered `:portable`
+(`DECISIONS.md#defalias`), the third flint-only case beside tags and custom
+preludes; and the standard library is all `.fln` (`DECISIONS.md#four-units`).*
+
 ### Open, and needing sign-off
 
 * ~~**Ordering.**~~ **Settled 2026-09-22 -- and it was settled in this
@@ -6790,7 +6802,7 @@ newline.** All three runtimes agreed, which is why nothing caught it: the
 conformance suite compares the runtimes against each other, and they were
 wrong together. `\t`, `\r`, `\\` and ordinary characters were all fine.
 
-The cause is one line in `lib/stdcore/flint/nfa.fln`. An unanchored search is compiled
+The cause is one line in `lib/stdextra/flint/nfa.fln`. An unanchored search is compiled
 as a `.*?` prefix in front of the anchored program, and the prefix stepped
 forward with `OP-ANY`:
 
@@ -15402,7 +15414,7 @@ the same files hand the compiler equal values.
   Clojure with the kin Java reader (§8 step 1).
 
 **flint has `defprotocol` and no `reify`.** Checked 2026-10-06 in
-`lib/stdcore/clojure/core.fln`: `defprotocol` dispatches on METADATA first and then on
+`lib/stdextra/clojure/core.fln`: `defprotocol` dispatches on METADATA first and then on
 kind, keyed by the fully-qualified method symbol -- Clojure's
 `:extend-via-metadata` convention -- so a flint value implements the protocol as
 `(with-meta {} {'flint.compiler.resolve/resolve-wave f})`. The declaration splices
@@ -15573,7 +15585,7 @@ sizes by `wc -l`, counted 2026-10-06 at this tree):**
 | `flint.wire` | 225 | hardcoded root: the call loop names `flint.wire/read-from` by var |
 | `flint.protocols` | 271 | `flint.port` and `flint.wire` both `:require` it (`WireMeta`); `clojure.core` also requires it |
 | `flint.core` | 107 | `flint.protocols` requires it (`:refer [kind]`); `clojure.core` requires it too |
-| `flint.regex` | 477 | `clojure.core` requires it directly, for `re-pattern`/`re-find`/`re-matches`/`re-seq` (`lib/stdcore/clojure/core.fln:1607-1612`) |
+| `flint.regex` | 477 | `clojure.core` requires it directly, for `re-pattern`/`re-find`/`re-matches`/`re-seq` (`lib/stdextra/clojure/core.fln:1607-1612`) |
 | `clojure.string` | 202 | `flint.regex` requires it |
 | `flint.nfa` | 185 | `flint.regex` requires it (the shared NFA compiler `flint.pike` also uses, but `flint.pike` itself is not in the closure) |
 
@@ -15653,7 +15665,7 @@ moves a file -- surveyed against this tree at `7577a7ce`.
   `comment` -- both are therefore DEAD CODE in the current tree, shadowed by
   the bootstrap table for every caller, found while tracing this closure and
   not fixed here). Then walked the reached vars' own bodies in
-  `lib/stdcore/clojure/core.fln` to a fixed point the same way, textually, with
+  `lib/stdextra/clojure/core.fln` to a fixed point the same way, textually, with
   three corrections a plain grep would have missed (`AGENTS.md` #1's "a
   count produced by a grep counts what the pattern understood"): a token
   immediately after `:` is a keyword, not a var (`:map`/`:set`/`:vector` in
@@ -15678,7 +15690,7 @@ moves a file -- surveyed against this tree at `7577a7ce`.
   `filter-over-vec`, `reduce-seq`, `reduce-indexed`, `seq-binding-form`),
   plus one bare `def` (`gensym-counter`, an atom `gensym` closes over).
   Approx 510 lines, summing each reached top-level form's own line span
-  (method: a script-assisted textual closure over `lib/stdcore/clojure/core.fln`,
+  (method: a script-assisted textual closure over `lib/stdextra/clojure/core.fln`,
   manually corrected for the three cases above; not independently
   cross-checked against a second reader, so treat the exact count as
   approximate rather than exact -- the shape, not the number to the var, is
@@ -15841,6 +15853,9 @@ moves a file -- surveyed against this tree at `7577a7ce`.
   which was correct for the tree it was written against and is the claim
   this amendment supersedes, not merely restates.
 
+* *BUILT 2026-10-08 -- see `DECISIONS.md#four-units`: stdcore is six
+  namespaces, `clojure.core` is reached through each referrer's prelude edge,
+  and `:refer-clojure` is honoured.*
 * **2026-10-07 (addendum, and this supersedes the bullet just above, not
   merely restates it): `clojure.core` is not a root at all -- not even an
   optional one. It is a library surface, pulled in exactly the way any other
@@ -16048,7 +16063,7 @@ from itself.
   2. **The move changes every stdlib file's `:file` metadata, so it needs a
      deliberate rebaseline, not a comparison against the old tree.** A
      namespace's `:file` is stamped from the path its reader read, so
-     renaming `lib/stdcore/clojure/core.fln` to `lib/stdcore/clojure/core.fln`
+     renaming `lib/stdextra/clojure/core.fln` to `lib/stdextra/clojure/core.fln`
      changes that metadata for all 36 namespaces at once, which changes the
      embedded stdlib forms and any image whose metadata is compared
      byte-for-byte alongside its code -- the same class of trap
@@ -16384,7 +16399,7 @@ sizes are estimates from reading the code, not measurements.
    `position-meta`); that merge's `transient` call promotes even a small
    array map to a CHAMP on EITHER side (`kin/maptrans.kin`: "AN ARRAY-MAP IS
    PROMOTED FIRST... there is one transient implementation and it is the
-   trie's" -- and the guest's own `lib/stdcore/clojure/core.fln` `merge` does the
+   trie's" -- and the guest's own `lib/stdextra/clojure/core.fln` `merge` does the
    same `(transient (first ms))`). Past that point the kin reader's own
    reconstruction check (`pos-parts`) accepts the resulting 7-key map for the
    compact position encoding, while the guest's rejects it for the same map
@@ -17509,7 +17524,7 @@ now asks the same thing on every machine, forever, not just until the next
 ### Which Unicode version, and why 18.0.0
 
 **Nothing else in this codebase assumes a Unicode version, so there was no
-existing constraint to match.** Checked before picking: `lib/stdcore/flint/regex.fln`
+existing constraint to match.** Checked before picking: `lib/stdextra/flint/regex.fln`
 implements `\w`/`\d`/`\s` as hand-coded ASCII ranges (`word-cp?`, `space-cp?`),
 not Unicode property classes, and inline flags / `(?i)` / locale-aware
 matching are refused outright by the parser ("only `(?: )` groups are
@@ -18376,8 +18391,10 @@ files -- so they were not re-audited independently.
 **Ratified:** ☐ not signed off
 
 **Status (2026-10-08, branch `restructure`): BUILT** -- the layout below, every
-door embedding it by root rather than by namespace prefix, and the separate
-blobs. What proves it is listed under each part. Decided by the maintainer
+door embedding it by root rather than by namespace prefix, the separate
+blobs, stdcore shrunk to six with `clojure.core` no longer a root, and the
+compiler's internals marked. NOT built: deleting
+`src/flint/compiler/reader.cljc` (see "Open" below). What proves it is listed under each part. Decided by the maintainer
 (2026-10-08); this records how it was built and what was found.
 
 ### What was decided
@@ -18442,6 +18459,101 @@ Four units, four workspaces, four (five) source roots:
   dialect)`). `cli/build.rs` no longer loads the compiler at all, so the
   `flint-conc` build-dependency is gone.
 
+### stdcore shrinks to six, and `clojure.core` is not a root (2026-10-08)
+
+The rest of the maintainer's decision, built on top of the layout above:
+
+* **`clojure.core` is a library, not a root.** `flint.compiler.resolve/project-roots`
+  no longer names it. Each namespace's PRELUDE is its implicit require edge:
+  `flint.compiler.analyzer/ns-prelude` -- one function, read by the wave walk
+  (`take-answer`) for the edge and by the analyzer (`prelude-of`, recorded by
+  `analyze-ns`) for name resolution, so the two cannot disagree -- starts from
+  `clojure.core` for a `.cljc` (or the workspace's `:flint/prelude` for a
+  `.fln`), narrows it by `:refer-clojure`, and appends `:refer :all` targets.
+  The edge carries the `ns` form's position, so a resolver that cannot answer
+  `clojure.core` gets a `:missing` error AT THE REFERRING NAMESPACE. The walk
+  only REQUESTS through these edges; `topo-order` still orders `clojure.core`
+  by the `core-first` pin, because `clojure.core` requires namespaces
+  (`flint.regex`) that refer it back, and an ordering edge would be a cycle.
+* **`(:refer-clojure :exclude/:only ..)` is honoured** (it was parsed and
+  dropped: `analyze-ns`'s arm was `nil`); `:rename` is refused by name; and
+  `(:require [x :refer :all])` works, joining `x`'s names to the prelude.
+  `test/requires.clj`: `:exclude` lets a namespace's own `count` win where it
+  is called before its `defn` (the control without the clause calls
+  `clojure.core`'s); `:only [str]` leaves `inc` unresolved; `:rename` refused;
+  `:refer :all` refers.
+* **stdcore is six namespaces, measured**: `bin/build-stdlib-forms`' probe now
+  refers nothing of `clojure.core` and the compiler answers `flint.check`,
+  `flint.core`, `flint.core.impl`, `flint.port`, `flint.protocols`,
+  `flint.wire` (`dist/stdcore.forms`, 75 938 bytes) -- equal to
+  `lib/stdcore/`, or the build would have failed. `clojure.core`,
+  `clojure.string`, `flint.regex` and `flint.nfa` moved to `lib/stdextra/`.
+* **`flint.core.impl`** (`^:internal`) holds what the five need of
+  `clojure.core`: 123 vars, 6 of them macros (`and`, `cond`, `doseq`,
+  `if-not`, `lazy-seq`, `or`) -- the closure of the names the five use, taken
+  through `clojure.core`'s own text by a script, including both branches of
+  every `#?` (so the check-build helpers come too), then confirmed by
+  compiling. The survey `#namespaces-over-the-system-port` §4 recorded for four
+  namespaces said ~90 vars and 7 macros; `flint.check` adds the rest, and
+  rewriting `flint.check`'s protocol longhand took `defprotocol` and
+  `extend-protocol` back out. `clojure.core` aliases 102 of the 123 back
+  under their public names with `defalias` (`DECISIONS.md#defalias`); the
+  other 21 were `defn-` helpers, now plain vars of the internal namespace so
+  `clojure.core`, in the same workspace, still calls them.
+* **What the five had to stop doing**, each found by asking what reaches
+  `clojure.core` without naming it: `@x` (the reader spells it
+  `clojure.core/deref`) is `(deref x)`; `flint.port/with-open` builds its
+  expansion with `list` rather than syntax quote (which expands through
+  `clojure.core/seq`/`concat`/`list`); `flint.check` writes its `Predicate`
+  protocol longhand, as `flint.protocols` already writes its own, and
+  destructures nothing (destructuring emits `clojure.core/get`); `expect`
+  expands to `flint.rt/first`/`flint.rt/ex-info`. And in what the moved
+  macros EXPAND TO, since that lands in stdcore too: `cond`, `and`, `or` expand
+  all the way in one step instead of into `clojure.core/cond` for the rest (the
+  same tree), and `doseq` walks with `flint.rt/seq`/`first`/`next`. The
+  compiler's own `defn` emits `flint.rt/with-meta` for `:flint/value-meta`
+  rather than `clojure.core/with-meta`.
+* **The entry shim** of a program with no `clojure.core` names builtins and
+  `flint.core.impl/pr-str`, and the compiler places that namespace, which it
+  wrote, in the standard library's workspace -- conferred, never asserted. With
+  `clojure.core` present the shim is unchanged.
+* **Load order**: `core-first` pins `flint.core.impl`, `flint.core`,
+  `flint.protocols`, `flint.check`, `clojure.core`.
+
+*What proves it* (`sdks/esm/selftest.mjs`, both check builds): a namespace
+written `(:refer-clojure :only [])` compiles and runs with NO `stdextra()` at
+all, and a recording resolver shows `clojure.core` was never asked; the
+control, identical but for the clause, reports `clojure.core` `:missing` at
+`stdxapp.cljc:1`, required by `stdxapp`. The SDK's stdcore list is exactly the
+six. A hostile resolver answering `flint.core.impl` and `flint.port` is never
+asked, and `clojure.core/str` is the real one.
+
+**A consequence to review**: `clojure.core` is answered like any other stdextra
+name now, so a host whose resolver answers `clojure.core` AHEAD of
+`stdextra()` replaces it (the old hostile-resolver test asserted the opposite,
+and was rewritten to target `flint.core.impl`, which is still stdcore); and a
+host that omits `stdextra()` has no `clojure.core`. Both follow from the
+decision; neither was true before.
+
+### The compiler's internals are `^:internal` (2026-10-08)
+
+Every `flint.compiler.*` namespace is marked `^:internal` (workspace-local to
+`flint/compiler`, `src/deps.edn`) except the two whose vars something outside
+the workspace names: `flint.compiler.selfhost` (`main` and `compile`, called
+by name by every door) and `flint.compiler.wasm` (`parse`, `test/bytes.clj`'s
+entry), whose OTHER vars are marked one by one. Found by grepping every
+`:fn`/`:exports`/call-by-name string in `bin/`, `test/`, `sdks/`, `cli/`,
+`host/`, `runtimes/` and `driver/` for a `flint.compiler.` name: three names,
+nothing else. `flint.rt` is not marked: it is the builtins' namespace, which
+every guest names. *Probed*, `test/visibility.clj`, through the real
+`bin/flint`: a program in its own root naming `flint.compiler.canon/ckey` is
+refused, "flint.compiler.canon/ckey is internal to flint/compiler"; the
+control, the same program in a root whose `deps.edn` names `flint/compiler`,
+compiles. (That control is also the limit worth saying: a workspace is
+whatever a root's `deps.edn` names, so a project can claim `flint/compiler`
+just as `test/regex_pike.clj` claims `flint/flint` -- the boundary is between
+workspaces as a host composes them, the same as for every other `^:internal`.)
+
 ### What changed in the artefacts, measured
 
 * **Corpus images: no change at all.** Every top-level `corpus/*.cljc`
@@ -18461,7 +18573,32 @@ Four units, four workspaces, four (five) source roots:
 * The native binary's pre-read: 35 files, 348 075 bytes of forms
   (`cli/build.rs`'s own warning line).
 
+* **After stdcore shrank, images CHANGE, and only in var names and order.**
+  All 63 corpus artefacts differ from the layout commit's (nbody `:to :wasm`
+  712 331 -> 712 837 bytes, `[perf]` 915 135 -> 915 641, words 768 829 ->
+  769 365). Decomposed for nbody, plain and `[perf]`, from `--emit-image`
+  images built by `bin/flint` in this tree and in a detached worktree at
+  `211e5876`: the same number of natives (91, 90), the same number of
+  constants (563, 541), and -- once every `clojure.core/<moved var>` name
+  string in the old image is renamed `flint.core.impl/<var>` -- the SAME
+  MULTISET of constants and the same byte length for everything after them
+  (function table and code: 19 784 and 19 457 bytes). What differs is the
+  ORDER: the moved vars are defined in `flint.core.impl`, which loads first.
+  No var was added or dropped and no call gained a hop -- an aliased call
+  compiles to what the target's call compiled to. Method: a constant-table
+  walk in Python over the image format `flint.compiler.imgread/parse` reads
+  (`imgread/parse-fns` throws on current images, which is a reader bug of its
+  own, not investigated here).
+
 ### Found doing it
+
+* **`bin/flint` recomputed its classpath on EVERY call** and rewrote the cache
+  in place: `DEPS_EDN` is three lines and was compared against `head -1` of
+  the cache, which never matched. Under `bin/conform-hosts`' `xargs -P` one
+  call read the file while another truncated it, and the first CI gate run on
+  this branch failed one fixture with "Could not locate
+  flint/driver/main__init.class". The key is one line now and the file is
+  replaced with `mv`.
 
 * **The Rust SDK cannot say a source is `.fln`.** Its `Compile.resolve` is
   `Fn(&str) -> Option<String>` (shared with the C ABI), so a namespace an
@@ -18469,3 +18606,94 @@ Four units, four workspaces, four (five) source roots:
   it came from. The embedded standard library is keyed by its real extension
   and is unaffected. Fixing it is a signature change across `sdks/rust` and
   `sdks/c` -- migration step 5's territory -- recorded rather than made.
+
+### Open
+
+* **`src/flint/compiler/reader.cljc` is NOT deleted.** The condition the
+  maintainer set -- the compiler's `:src` fallback and the forms-level helpers
+  no longer needing it -- does not hold yet, counted 2026-10-08: the compiler
+  still READS TEXT for every door that hands it text (the EDN-spec path, which
+  the Rust SDK, the C API, the JVM/CLR `Compiler`, `FLINT_PREREAD=0` and
+  `--emit-spec` replays all use; and its own synthetic namespaces, the entry
+  shim and the check registry, which it writes as text and reads back), and
+  `bin/manifest`, `driver/flint/driver/main.clj` (`flint check`'s lint,
+  `read-one` for module metadata) and `cli/src/kin_reader_test.rs`'s oracle
+  (`preread` mode) call it. The forms-level half (`default-features`,
+  `bookkeeping-meta`, `position-meta`, `require-clauses`, the
+  `syntax-quoted`/`#?` markers, `resolve-conditionals`) can move to
+  `flint.compiler.forms` mechanically; the text half needs migration step 5
+  (forms-only answers from every door) first. `bin/check-reader`'s oracle
+  would then need committed golden forms bytes, since the guest reader it
+  compares against would be gone.
+
+## defalias
+
+**`defalias`: a second name for one var, resolved at compile time, and only in a `.fln`**
+
+**Ratified:** ☐ not signed off
+
+**Status (2026-10-08, branch `restructure`): BUILT** --
+`flint.compiler.core/declare-namespace!` (registration and the dialect
+refusal), `flint.compiler.analyzer/alias-target`, `qualify`, `record-dep!`,
+`analyze-defalias`. Decided by the maintainer
+(`DECISIONS.md#namespaces-over-the-system-port` §4, 2026-10-07: "`defalias` is
+allowed only in `.fln` namespaces"); this records how it was built.
+
+### What it does
+
+    (defalias seq flint.core.impl/seq)      ; in clojure.core, a .fln
+
+declares `clojure.core/seq` as ANOTHER NAME for `flint.core.impl/seq`. There is
+no alias var at run time. Every reference to the alias -- unqualified through a
+prelude or a refer, qualified, through an `:as`, in value position, as a macro
+head, as an `:inline` call -- resolves to the TARGET in `qualify`, so the call
+compiles exactly as a call to the target: its `:inlines` entry, its native
+alias (a one-builtin body called directly), its macro expander, its
+`:dynamic`, its projections and inversions are all looked up under the target
+symbol, which is where they are. Nothing is copied, so nothing can drift, and
+there is no per-call indirection because there is no second var. The decision
+text sketched copying the records under the alias name; resolving to the
+target gets the same result with one table instead of two, and is what was
+built.
+
+* **The NAME the source wrote is what privacy is checked against.**
+  `alias-target` hands back the target carrying `::via <alias>` metadata, and
+  `record-dep!` checks `^:private`/`^:internal` on the alias: `clojure.core/seq`
+  is public although `flint.core.impl` is `^:internal`. **A GUARD IS CHECKED ON
+  BOTH**, alias and target: an alias is a second name for the target's
+  authority, never a way around it.
+* **Whether the DEFINER may name the target is checked where the alias is
+  defined** (`analyze-defalias`): the same privacy and guard checks any
+  reference gets, from the alias's namespace, plus that the target exists. So
+  an alias cannot publish what its definer could not have called.
+* **Registered in the read pre-pass**, beside `:declared`, for the reason
+  `:declared` is filled there: a namespace analysed before the definer
+  resolves through it too. The target may be written through an `:as` alias;
+  the pre-pass reads the `ns` form's `:as` table to qualify it.
+* **Top level only.** Reached any other way -- nested, or as a macro's
+  expansion, which the pre-pass cannot see -- it is a compile error saying so.
+* **Two names for one var are one prelude hit**: `clojure.core` refers
+  `flint.core.impl :all` and aliases its vars, and `prelude-resolve` would
+  otherwise call that ambiguous.
+
+### `.fln` only, by the resolver's word
+
+`declare-namespace!` refuses `defalias` in any namespace whose answer was not
+`:flint`, with "defalias is flint-only and allowed only in a .fln namespace;
+<ns> was answered as portable". The dialect is the one the RESOLVER answered
+(`:workspaces ns :dialect`, lifted off the answer), never anything the source
+says about itself -- there is no in-file spelling that unlocks it
+(`DECISIONS.md#dialects-and-preludes`).
+
+*Probed as programs, each with a control that differs in one thing*:
+`sdks/esm/selftest.mjs`, "defalias in a .fln: the alias of a private var is
+callable, and is that var" (42) and "the same defalias in a .cljc is refused,
+naming the dialect" -- the same two files, `aliaslib.fln` against
+`aliaslib.cljc`; and through `bin/flint test`, a `.fln` aliasing both a private
+function and a private macro, called from a `.cljc` (1/1 passed), against the
+same file renamed `.cljc` (refused, same message). The guard through an alias,
+`test/visibility.clj` "a guard is checked through a defalias": a `.fln` in a
+workspace granted `:host` aliases `flint.host/ask`, and a program in a
+workspace without `:host` calling the alias is refused, "flint.host/ask is
+guarded with #{:host} by flint/flint"; the control grants the caller `:host`
+and compiles.

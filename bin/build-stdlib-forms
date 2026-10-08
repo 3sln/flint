@@ -144,7 +144,10 @@ for (const unit of UNITS) {
 
 // --- ask the compiler which of them every image needs -------------------------
 const PROBE = 'flint-stdcore-probe';
-const probeText = `(ns ${PROBE})\n(defn main [_] nil)\n`;
+// REFERRING NOTHING OF `clojure.core`: it is a library now, reached only by the
+// namespaces that refer it (`DECISIONS.md#four-units`), so a probe that referred
+// it would measure `clojure.core`'s closure rather than every image's.
+const probeText = `(ns ${PROBE} (:refer-clojure :only []))\n(defn main [_] nil)\n`;
 const slots = JSON.parse(fs.readFileSync(path.join(dist, 'slots.json'), 'utf8'));
 const inst = instantiate(new WebAssembly.Module(fs.readFileSync(path.join(dist, 'flintc.wasm'))));
 if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(3_000_000_000);

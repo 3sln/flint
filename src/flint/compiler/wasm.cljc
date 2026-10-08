@@ -65,7 +65,7 @@
 
 ;; --------------------------------------------------------------- byte output
 
-(defn uleb
+(defn ^:internal uleb
   "Encode an unsigned integer as LEB128, returning a seq of byte values."
   [n]
   (loop [n (long n) out []]
@@ -75,7 +75,7 @@
         (conj out x)
         (recur n' (conj out (bit-or x 0x80)))))))
 
-(defn sleb [n]
+(defn ^:internal sleb [n]
   (loop [n (long n) out []]
     (let [x (bit-and n 0x7f)
           n' (bit-shift-right n 7)
@@ -87,7 +87,7 @@
 
 (defn- bytes->vec [b] (flint.rt/b->vec b))
 
-(defn ->bytes
+(defn ^:internal ->bytes
   "Flatten a nested structure of byte values and byte strings into one byte
   string. Built through a transient: this is the output path for a whole
   module, and appending persistently would copy everything written so far on
@@ -104,7 +104,7 @@
      x)
     (flint.rt/b-persistent! out)))
 
-(defn utf8-bytes [s]
+(defn ^:internal utf8-bytes [s]
   ;; The `:flint` branch is not decoration. This file is read with
   ;; `#{:flint}`, so a conditional with only `:clj` and `:cljs` selects
   ;; NOTHING -- and a `defn` whose body vanishes is still a `defn`, so what you
@@ -141,14 +141,14 @@
             payload (flint.rt/b-slice b i2 (+ i2 size))]
         (recur (+ i2 size) (conj secs {:id id :payload payload}))))))
 
-(defn emit [{:keys [version sections]}]
+(defn ^:internal emit [{:keys [version sections]}]
   (->bytes [0x00 0x61 0x73 0x6d (or version [1 0 0 0])
             (for [{:keys [id payload]} sections]
               [id (uleb (blen payload)) payload])]))
 
-(defn section [m id] (first (filter #(= id (:id %)) (:sections m))))
+(defn ^:internal section [m id] (first (filter #(= id (:id %)) (:sections m))))
 
-(defn put-section
+(defn ^:internal put-section
   "Replace the section with `id`, or insert it in canonical order."
   [m id payload]
   (if (section m id)
@@ -160,7 +160,7 @@
 
 ;; ------------------------------------------------------------------- exports
 
-(defn exports
+(defn ^:internal exports
   "{name {:kind :func|:table|:memory|:global :index n}}"
   [m]
   (if-let [{:keys [payload]} (section m 7)]
@@ -177,7 +177,7 @@
                    (assoc acc nm {:kind ([:func :table :memory :global] kind) :index idx}))))))
     {}))
 
-(defn global-i32-init
+(defn ^:internal global-i32-init
   "The `i32.const` initialiser of global `idx`. lld emits `__heap_base` and
   friends this way, which is how the patcher learns where it may put data."
   [m idx]
@@ -204,12 +204,12 @@
 (defn- write-limits [{:keys [flags min max]}]
   (concat [flags] (uleb min) (when max (uleb max))))
 
-(defn table-min [m]
+(defn ^:internal table-min [m]
   (when-let [{:keys [payload]} (section m 4)]
     (let [[n i] (rd-uleb payload 0)]
       (when (pos? n) (:min (read-limits payload (inc i)))))))   ; skip reftype
 
-(defn set-table-min [m v]
+(defn ^:internal set-table-min [m v]
   (let [{:keys [payload]} (section m 4)
         [n i] (rd-uleb payload 0)
         reftype (ub payload i)
@@ -221,12 +221,12 @@
                                                     :max (when (:max lim) (clojure.core/max v (:max lim)))))
                                rest-b]))))
 
-(defn memory-min [m]
+(defn ^:internal memory-min [m]
   (when-let [{:keys [payload]} (section m 5)]
     (let [[n i] (rd-uleb payload 0)]
       (when (pos? n) (:min (read-limits payload i))))))
 
-(defn set-memory-min [m pages]
+(defn ^:internal set-memory-min [m pages]
   (let [{:keys [payload]} (section m 5)
         [n i] (rd-uleb payload 0)
         lim (read-limits payload i)
@@ -244,7 +244,7 @@
       [n (flint.rt/b-slice payload i (blen payload))])
     [0 (flint.rt/str->b "")]))
 
-(defn append-elem
+(defn ^:internal append-elem
   "Append an active element segment placing `funcidxs` in table 0 at `base`.
   Grows the table's minimum to fit. Returns [module base]."
   [m base funcidxs]
@@ -258,7 +258,7 @@
         m (if (< (or (table-min m) 0) need) (set-table-min m need) m)]
     [m base]))
 
-(defn append-data
+(defn ^:internal append-data
   "Append an active data segment writing `data` at linear-memory address `addr`.
   Grows the memory minimum to cover it. `data` may be a byte array or a seq of
   byte values -- the image writer produces the latter, because it has to run on
@@ -275,7 +275,7 @@
         m (if (< (or (memory-min m) 0) pages) (set-memory-min m pages) m)]
     m))
 
-(defn strip-custom
+(defn ^:internal strip-custom
   "Drop custom sections by name (`name`, `producers`, `target_features`, ...).
   Saves real bytes in the output module."
   [m names]
@@ -287,7 +287,7 @@
                                   (contains? names (str-at payload i len)))))
                          ss)))))
 
-(defn imports
+(defn ^:internal imports
   "Every import, as `{:module :name :kind}`. A flint program imports nothing;
   this exists because `module-metadata-and-shards`'s capability descriptor is precisely `how to spin
   up the glue`, and a descriptor derived from the module cannot drift from it."
@@ -317,7 +317,7 @@
             (recur i7 (inc k) (conj out {:module mod :name nm :kind kind}))))))
     []))
 
-(defn add-custom
+(defn ^:internal add-custom
   "Add a custom section named `nm` carrying `payload`, placed EARLY.
 
   Early matters (`DECISIONS.md#module-metadata-and-shards`): a runner deciding whether it can load a
@@ -341,7 +341,7 @@
                                     [{:id 0 :payload body}]
                                     (subvec ss at))))))
 
-(defn custom-section
+(defn ^:internal custom-section
   "The payload of the custom section named `nm`, or nil. Parsing only -- this is
   what a runner does, and it must work without instantiating anything."
   [m nm]
@@ -352,7 +352,7 @@
                 (flint.rt/b-slice payload (+ i len) (blen payload))))))
         (:sections m)))
 
-(defn rename-export
+(defn ^:internal rename-export
   "Rename an export. Needed because `wasm-ld` special-cases a symbol named
   `main` and wraps it; we export `flint_main` and rename afterwards."
   [m from to]
@@ -371,7 +371,7 @@
           (recur i4 (inc k)
                  (conj out [(uleb (count enc)) enc kind (uleb idx)])))))))
 
-(defn func-index [m sym]
+(defn ^:internal func-index [m sym]
   (get-in (exports m) [sym :index]))
 
 ;; ------------------------------------------------------- appending functions
@@ -381,7 +381,7 @@
 ;; needs: compiled arities are emitted after the link, because only then are the
 ;; helper functions' indices known.
 
-(defn imported-funcs
+(defn ^:internal imported-funcs
   "How many functions the import section declares. Function indices count
   imports first, so an appended body that got this wrong would call the wrong
   function and be very hard to see."
@@ -413,7 +413,7 @@
     (first (rd-uleb payload 0))
     0))
 
-(defn add-type
+(defn ^:internal add-type
   "Append a function type, returning [module type-index]. Types are compared by
   bytes so a repeated signature does not add a second entry."
   [m params results]
@@ -447,7 +447,7 @@
       [m hit]
       [(put-section m 1 (->bytes [(uleb (inc n)) body enc])) n])))
 
-(defn append-funcs
+(defn ^:internal append-funcs
   "Append function bodies of type `type-idx`. `bodies` are already-encoded code
   entries (locals declaration followed by the instruction bytes, without the
   size prefix). Returns [module first-function-index]."
@@ -493,7 +493,7 @@
      :capabilities (contains? has? "flint_opaque_host_id")
      :aot (boolean aot?)}))
 
-(def current-abi
+(def ^:internal current-abi
   "What this build of flint can link. A unit declaring anything else is refused
   by name and version rather than linked and left to crash at run time.
 
@@ -510,7 +510,7 @@
   and both callers already require this namespace."
   {:runtime 1 :value 1 :image 1})
 
-(defn describe
+(defn ^:internal describe
   "What a wasm module says about itself, canonical.
 
   `:memory`, the feature probes and the `:imports` derivation are the TARGET's and

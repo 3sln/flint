@@ -1,4 +1,4 @@
-(ns flint.compiler.clr
+(ns ^:internal flint.compiler.clr
   "An ECMA-335 assembly writer: enough to emit a loadable .NET assembly from
   scratch, with the bytecode image as a static byte array in `.text`.
 

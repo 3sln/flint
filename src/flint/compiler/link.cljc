@@ -1,4 +1,4 @@
-(ns flint.compiler.link
+(ns ^:internal flint.compiler.link
   "Composes a module from units.
 
   Reachability decides what is linked (`DECISIONS.md#namespace-units`):
