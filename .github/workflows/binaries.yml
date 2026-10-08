@@ -82,6 +82,10 @@ jobs:
 
       # PINNED to bin/bb-version, not the rolling `latest` alias
       # (DECISIONS.md#pin-the-babashka-version).
+      - name: Read the pinned Clojure CLI version
+        id: clojure-version
+        run: echo "version=$(cat bin/clojure-version)" >> "$GITHUB_OUTPUT"
+
       - name: Read the pinned babashka version
         id: bb-version
         shell: bash
@@ -90,6 +94,8 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13
         with:
           bb: ${{ steps.bb-version.outputs.version }}
+          # bin/flint is a JVM-Clojure driver now; pinned like bb (bin/clojure-version).
+          cli: ${{ steps.clojure-version.outputs.version }}
 
       - uses: actions/setup-node@v4
         with:
