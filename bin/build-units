@@ -302,10 +302,19 @@ if [ -z "$DIAG" ] && [ -z "$AOT" ]; then
   export LD_LIBRARY_PATH="$TC/lib:${LD_LIBRARY_PATH:-}"
   # The same stack placement every flint module gets (`flint.compiler.link/link-objects`
   # says why: an overflow must trap at address zero, not scribble the statics).
+  #
+  # `runtime/wasm-imports.txt` is the ONE list of symbols `units/flint/rt.o` leaves
+  # undefined ON PURPOSE -- `flint_panic`, the wasm panic-message import
+  # (`DECISIONS.md#panic-message-import`) -- read directly by this call and by
+  # `flint.compiler.link/link-objects`'s own `--allow-undefined-file`, rather
+  # than restated in each (AGENTS.md sec. 1). Without it `rust-lld` refuses the
+  # link outright ("undefined symbol: flint_panic"): an undefined FUNCTION is
+  # not an import by default, only one this flag names is.
   "$LLD" -flavor wasm --no-entry --gc-sections --strip-all \
     -z stack-size=1048576 --stack-first \
     --export=flint_reader_in --export=flint_reader_read \
     --export=flint_reader_out_ptr --export=flint_reader_out_len \
+    --allow-undefined-file=runtime/wasm-imports.txt \
     -o units/.reader/flint-reader.wasm \
     units/.reader/reader.o units/flint/rt.o units/.sysroot/*.rlib \
     > units/.reader/link.log 2>&1 || { sed 's/^/    /' units/.reader/link.log | grep -v 'neither Wasm object' | tail -30; exit 1; }

@@ -116,6 +116,7 @@ this block.
 - [gate-timings](#gate-timings) -- Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew, and two earlier figures corrected.
 - [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
 - [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not in the original byte-identity proof above, and the entry that used to stand here was wrong.
+- [panic-message-import](#panic-message-import) -- A wasm panic tells the host what happened, without pulling `core::fmt` into a `no_std` runtime.
 - [four-units](#four-units) -- The guest source flint ships is four units, each its own workspace in its own source root
 - [defalias](#defalias) -- `defalias`: a second name for one var, resolved at compile time, and only in a `.fln`
 <!-- TOC:END -->
@@ -19209,6 +19210,173 @@ absolute one, by default.
 audited.** `sdks/esm` and `sdks/cli`'s own build scripts were checked and do
 not invoke cargo or rustc themselves -- they copy `dist/`'s already-fixed
 files -- so they were not re-audited independently.
+
+## panic-message-import
+
+**A wasm panic tells the host what happened, without pulling `core::fmt` into
+a `no_std` runtime.**
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-10-08.** `runtime/src/lib.rs`'s wasm `#[panic_handler]`
+used to be `core::arch::wasm32::unreachable()`, discarding `PanicInfo` in
+EVERY build -- a runtime panic on wasm told every host nothing beyond "it
+trapped". It now calls a new wasm IMPORT, `env.flint_panic(ptr, len, file_ptr,
+file_len, line, col)`, with the panic's message (and, in a diagnostics build,
+its location) just before trapping, and every JS host that instantiates a
+flint wasm module now supplies that import.
+
+### The signature is one, not two
+
+`(ptr, len)` is the message, always present. `(file_ptr, file_len, line,
+col)` is the location, present (`file_len != 0`) only when the build that
+produced the module kept one. A RELEASE build always passes zeros for the
+four location fields -- `bin/rust-release-flags`'
+`-Zlocation-detail=none` already reduces `PanicInfo::location()`'s `file()`
+to the literal `"<redacted>"` and its line/column to 0, so this handler does
+not even call `.location()` under that build -- and a DIAGNOSTICS build
+(`bin/build-units --diagnostics`, which calls `bin/rust-remap-flags` alone,
+without `-Zlocation-detail=none`) fills them in for real. One wasm import
+signature covers both builds; a host branches on one flag (`file_len === 0`)
+rather than needing two signatures, which is also what keeps
+`runtime/wasm-imports.txt` (below) a single list rather than one per build.
+
+### No `core::fmt`
+
+`PanicMessage::as_str()` -- `core::panic::PanicInfo::message().as_str()` --
+is the API this hinges on: `Some(&str)` for a literal `panic!("...")`,
+`unwrap()` or `expect("...")` message (the overwhelming majority of panics in
+this tree), with no `Display`/formatting machinery involved, and `None` for a
+panic built with format arguments, where a fixed fallback string stands in
+("panic (formatted message unavailable)") rather than formatting anything.
+`Location::file()`/`line()`/`column()` are primitives, not `Display`, so
+reading them under `diagnostics` pulls in nothing either.
+
+**Measured, not assumed.** `dist/flint-runtime.wasm` (and
+`flint-runtime-aot.wasm`/`flint-loader.wasm`, which are the same build):
+832 940 B before this change, 833 089 B after -- **+149 bytes**. `flintc.wasm`:
+920 700 B -> 920 842 B, +142 bytes. `flint-reader.wasm`: 436 313 B -> 436 437 B,
++124 bytes. (Baseline built from a `git worktree add --detach 8693953c`
+sibling of this checkout under `@3sln/`, so `bb.edn`'s `:local/root "../kin"`
+resolved; both sides built with `bin/build-dist` alone, nothing else.) Tens of
+bytes, not tens of KB -- if `core::fmt` had been pulled in, this is where it
+would have shown.
+
+### The import had to be allowed, by name, or the link fails
+
+An undefined DATA symbol becomes a wasm import error unless told otherwise,
+but so does an undefined FUNCTION in `rust-lld`'s wasm port, which is not the
+assumption a Rust-and-wasm tutorial leaves you with: linking any flint module
+after adding the bare `extern "C" { fn flint_panic(...); }` failed outright
+with `rust-lld: error: units/flint/rt.o: undefined symbol: flint_panic`.
+`runtime/wasm-imports.txt` is the one list of symbols flint's units leave
+undefined on purpose (today, just `flint_panic`), passed as
+`--allow-undefined-file=runtime/wasm-imports.txt` by both
+`flint.compiler.link/link-objects` (every ordinary program, and `flintc.wasm`/
+`flint-runtime.wasm`/`flint-loader.wasm`/`flint-runtime-aot.wasm`) and
+`bin/build-units`'s own direct `rust-lld` call for `flint-reader.wasm` -- one
+file, read by both, rather than the same symbol name typed twice (AGENTS.md
+sec. 1). `--allow-undefined` (allow-all) was not used: it would have hidden
+any OTHER missing symbol as a silent import too.
+
+### Every JS host supplies it
+
+`sdks/esm/src/guest.js` exports `panicImport()`: the import function itself
+(records the last panic's message/location, reading the calling instance's
+OWN `memory.buffer` fresh each time rather than a cached one, since a panic
+can happen after the memory has grown), and `wrap(exports)`, which returns a
+**plain copy** of an instance's exports with every function wrapped in a
+try/catch that rewrites a `WebAssembly.RuntimeError`'s message when (and only
+when) a panic was just recorded for it, clearing the record after one use. A
+trap or thrown value with no recorded panic -- an ordinary `memory access out
+of bounds`, a flint `(throw ...)` -- passes through completely unchanged.
+
+**Not a `Proxy` over the real exports object.** That was tried first and
+fails on the very first call: `WebAssembly.Instance.exports`' function
+properties are non-configurable, non-writable data properties, and `Proxy`'s
+`get` trap is bound by a JS invariant to return the EXACT SAME VALUE as the
+target's own for such a property -- handing back a wrapping closure instead
+throws `TypeError: 'get' on proxy: ... the proxy did not return its actual
+value` immediately. A freshly built plain object has no such property to
+violate.
+
+`instantiate()` (the driver every JS door shares -- `host/flint.mjs`,
+`sdks/esm`'s `flint.js`, `sdks/cli` via its copy, every `test/*.mjs` conform
+script) uses `panicImport()` for the main runtime module. `resolve.js`'s
+`Reader` -- the standalone kin reader, `units-src/flint-reader`, which links
+the same `runtime/src/lib.rs` and so carries the same import -- uses the same
+function rather than restating the wrap logic a second time. `sdks/cli/build`
+copies `guest.js`, `codec.js` and `resolve.js` verbatim, so the npm CLI door
+needed no separate fix.
+
+**The native CLI has no wasm embedding to fix.** `cli/src/main.rs` runs
+flint's runtime NATIVELY (`#[cfg(not(target_arch = "wasm32"))]`), so the new
+`extern "C" { fn flint_panic(...); }` block (itself `#[cfg(target_arch =
+"wasm32")]`) is not even compiled in; a native panic already goes through
+Rust's ordinary `std` panic machinery and prints its own message. Where the
+native CLI drives wasm AT ALL -- `flint.sys.wasm`'s `run_module`
+(`cli/src/sys.rs`), which hands a job to whatever JS engine it found on the
+machine -- it does so through `host/run.js`, which imports `instantiate` from
+`sdks/esm/src/guest.js` like every other JS door, so it is covered by the
+same fix with no code of its own.
+
+**JVM and CLR are not wasm hosts, checked rather than assumed.** `grep -rli
+wasm runtimes/jvm runtimes/clr` turns up only comments and image-format code
+(`Image.java`/`Image.cs`, the AOT planner) -- `runtimes/jvm` and
+`runtimes/clr` are from-scratch reimplementations of flint's interpreter in
+Java and C# respectively (`DECISIONS.md#other-hosts`), not programs that ever
+instantiate a `.wasm` file, so there is no panic-message import for either to
+supply.
+
+### Not touched
+
+`bench/*.mjs` and `bench/workerd/worker.js` call `new WebAssembly.Instance`
+directly, deliberately bypassing the SDK driver
+(`DECISIONS.md#cross-runtime-benchmarks`: "nothing but a `WebAssembly.Instance`
+-- the JS engines' equivalent of `wasmtime --invoke main`"), and now also need
+the import satisfied or instantiation itself throws. Left unfixed here: that
+record already says `bin/bench-xruntime`'s harness is broken for unrelated,
+previously-recorded reasons (every engine row already `FAILED` before this
+change), and the explicit list of hosts this decision covers (every door
+`bin/check`/`bin/test` exercise) does not include it. A later pass on that
+harness needs to supply `{ env: { flint_panic() {} } }` at minimum for the JS
+engines, and has no answer at all yet for `wasmtime`/`wasm3`'s bare-CLI
+invocation, which that same record already treats as a harder, separate
+problem.
+
+### Proof
+
+A standalone probe object (`panic!("probe panic message")`, no `#[panic_handler]`
+of its own -- none needed, since the lang item is resolved once for the whole
+link closure and `units/flint/rt.o` already provides it), compiled and linked
+twice against `units/flint/rt.o` -- once from a `bin/build-units` PRODUCTION
+tree with `bin/rust-release-flags`, once from a `--diagnostics` tree with
+`bin/rust-remap-flags` alone -- each exporting one `probe()` function, no
+other builtin or port machinery. Instantiated from Node with `guest.js`'s
+`panicImport()`/`wrap()`, calling `.probe()` directly:
+
+* production module: `RuntimeError: probe panic message`
+* diagnostics module: `RuntimeError: probe panic message at
+  /tmp/flint-panic-probe/probe.rs:4:5`
+
+**Control, same mechanism, no panic:** a second production-tree probe
+(`core::ptr::read_volatile` on `0xFFFFFFF0`) through the identical
+`wrap()`, called the same way: `RuntimeError: memory access out of bounds`,
+unchanged from wasm's own wording -- `wrap` only rewrites a
+`WebAssembly.RuntimeError` when a panic was just recorded for it, and no
+`flint_panic` call happens on this path. A flint `(throw ...)` is unaffected
+by construction rather than by this test: it is encoded data on the wire,
+surfaced by `guest.js`'s own `pumpFor`/`callServing` throwing an ordinary
+`Error` (never a `WebAssembly.RuntimeError`), so `wrap`'s
+`instanceof WebAssembly.RuntimeError` check never matches it.
+
+**End-to-end, not just the raw probe:** `sdks/cli/build`'s own selftest
+(byte-identity between the native and npm CLI doors on `:to :wasm`, `:to
+:clr`, `:to :jvm`; `flint.ception`'s nested-sandbox, capability and
+catchable-throw rows) passed in full against the rebuilt `guest.js`/
+`resolve.js`, and `bin/build-dist` itself ran the self-hosted compiler
+through the same `instantiate()`/`wrap()` path (compiling the standard
+library) with no behaviour change on the paths that do not panic.
 
 ## four-units
 
