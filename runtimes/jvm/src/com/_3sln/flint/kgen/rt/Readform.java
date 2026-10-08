@@ -858,12 +858,13 @@ public final class Readform {
             rt.popTo(base);
             return rdFailLit(rt, sti, "reader tag must be a symbol");
         }
-        long target = mapGet(rt, rdGet(rt, sti, RDS_TAGS), rt.r(base), Val.NIL);
-        if (Val.isNil(target)) {
+        long target0 = mapGet(rt, rdGet(rt, sti, RDS_TAGS), rt.r(base), Val.NIL);
+        if (Val.isNil(target0)) {
             int te = tagError(rt, sti, base);
             rt.popTo(base);
             return te;
         }
+        long target = withMeta(rt, target0, Val.NIL);
         int tgi = rt.push(target);
         if (rdFlag(rt, sti, RDS_PORTABLE)) {
             int pe = portabilityError(rt, sti, base);

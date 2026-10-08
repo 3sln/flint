@@ -110,6 +110,27 @@ if [ -x target/release/flint ]; then
   fi
   echo "  ok   the native CLI's assembly loads and checks out too"
 
+  # `:to :clr` BYTE-REPRODUCIBLE, same checkout, output path held constant.
+  # `DECISIONS.md#reproducible-build-paths`'s own proof excluded this target,
+  # citing a non-determinism found by comparing two compiles that did NOT
+  # share an output path -- `a.dll` against `b.dll` -- so the two bytes that
+  # actually differed were the MODULE NAME string the assembly correctly
+  # takes from `:out`, read as a writer bug (`DECISIONS.md#reproducible-build-paths`'s
+  # own "What is not claimed" now corrected). Same name, same bytes is the
+  # real question, and it is asked here: compile the SAME program to the SAME
+  # path twice, in two directories so the second compile cannot be comparing
+  # against itself.
+  mkdir -p "$OUT/repro-a" "$OUT/repro-b"
+  ./target/release/flint compile :path "$OUT/src" :fn prog/main :to :clr \
+    :out "$OUT/repro-a/Native.dll" > /dev/null 2>&1 \
+    || fail "the native CLI's \`:to :clr\` did not emit, for the reproducibility check"
+  ./target/release/flint compile :path "$OUT/src" :fn prog/main :to :clr \
+    :out "$OUT/repro-b/Native.dll" > /dev/null 2>&1 \
+    || fail "the native CLI's \`:to :clr\` did not emit, for the reproducibility check"
+  cmp -s "$OUT/repro-a/Native.dll" "$OUT/repro-b/Native.dll" \
+    || fail "\`:to :clr\` is not byte-reproducible: two compiles of the same program to the same output path differ"
+  echo "  ok   \`:to :clr\` is byte-reproducible (same program, same output path, two compiles, identical bytes)"
+
   # AND ITS `:optimize [perf]` ARTIFACT ACTUALLY ASKS FOR ARITIES. The perf arm
   # below builds with `bin/flint` and asserts the entry count, which is the right
   # assertion on the wrong door: `flint.selfhost` never wrote `FLAG-PERF` into the

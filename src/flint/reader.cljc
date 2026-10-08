@@ -746,8 +746,8 @@
         ;; which takes `:readers` and `:default` and has always refused an
         ;; unknown tag. That is where a tagged literal comes from at runtime.
         (let [readers (:tags @st)
-              target (get readers tag)]
-          (if-not target
+              target0 (get readers tag)]
+          (if-not target0
             (err st (tag-error tag readers))
             ;; PORTABILITY, checked AFTER the tag resolved and not before.
             ;; An unbound tag in a `.cljc` is two complaints at once -- it is
@@ -757,6 +757,25 @@
             (if (and (= :portable (:dialect @st))
                      (not (contains? portable-tags tag)))
               (err st (portability-error tag (:file @st)))
+            ;; STRIPPED OF WHATEVER METADATA IT CARRIED IN. `target0` is a
+            ;; value out of the WORKSPACE'S OWN tag map, not out of the text
+            ;; this read is reading -- `deps.edn`'s own position when a host
+            ;; reads it with the full reader, nothing at all when a host
+            ;; builds the map programmatically (the native CLI's tokenizer,
+            ;; `cli/src/resolve.rs`). Embedding it as read made `:flint/read-var`
+            ;; carry a DIFFERENT symbol -- same name, different `meta` -- on
+            ;; hosts that happened to construct the map differently, so the
+            ;; SAME source read the same way still disagreed byte for byte
+            ;; (`DECISIONS.md#reader-tags`, "found, not fixed" -- the earlier
+            ;; guess there, a string-table ORDER difference, was itself wrong:
+            ;; measured, it is three STRAY ENTRIES -- the bound var's foreign
+            ;; `:line`/`:column`/`:file`, defaulting to `reader.cljc`'s own
+            ;; `"<string>"` constant when that build path has no file to give
+            ;; it -- not a reordering of the ones both sides already agree on).
+            ;; A tag binding's own var does not say where it was bound; that
+            ;; is not this read's business either way, so it is dropped here
+            ;; rather than reproduced on every other construction of a tags map.
+            (let [target (with-meta target0 nil)]
             ;; A REWRITE, not a call. The reader evaluates nothing: it emits
             ;; `(the-var form)` and the ordinary pipeline takes it from there --
             ;; a macro expands at compile time and can fold to a constant, a
@@ -779,7 +798,7 @@
               {:flint/read-form (flint.rt/tagged-literal tag v)
                :flint/read-tag tag
                :flint/read-var target
-               :line (:line @st) :column (:col @st) :file (:file @st)}))))))))
+               :line (:line @st) :column (:col @st) :file (:file @st)})))))))))
 
 (defn- read-symbolic [st]
   (let [tok (read-token st)]

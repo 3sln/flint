@@ -864,12 +864,13 @@ impl Rt {
             self.pop_to(base);
             return self.rd_fail_lit(sti, "reader tag must be a symbol");
         }
-        let target: Value = self.map_get(self.rd_get(sti, RDS_TAGS), self.r(base), NIL);
-        if target.is_nil() {
+        let target0: Value = self.map_get(self.rd_get(sti, RDS_TAGS), self.r(base), NIL);
+        if target0.is_nil() {
             let te: u32 = self.tag_error(sti, base);
             self.pop_to(base);
             return te;
         }
+        let target: Value = self.with_meta(target0, NIL);
         let tgi: usize = self.push(target);
         if self.rd_flag(sti, RDS_PORTABLE) {
             let pe: u32 = self.portability_error(sti, base);

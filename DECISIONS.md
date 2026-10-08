@@ -113,7 +113,7 @@ this block.
 - [pin-the-babashka-version](#pin-the-babashka-version) -- A test-methodology trap found while verifying, recorded so it is not repeated.
 - [gate-timings](#gate-timings) -- Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew, and two earlier figures corrected.
 - [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
-- [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not included in the byte-identity proof
+- [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not in the original byte-identity proof above, and the entry that used to stand here was wrong.
 <!-- TOC:END -->
 
 ---
@@ -16326,28 +16326,90 @@ sizes are estimates from reading the code, not measurements.
    was true: no export reached `read_forms`.) `test/reader_test.clj` still runs on
    `reader.cljc` (it is babashka, which cannot call a generated reader).
 
-   *Found, NOT fixed, migrating `bin/flint` off babashka (step 1.2 below):*
-   `kin/readform.kin`'s `read-tagged` (a custom `#tagname` reader tag,
+   *Found 2026-10-07, migrating `bin/flint` off babashka (step 1.2 above);
+   PARTLY FIXED 2026-10-08 -- and the mechanism first recorded here was
+   wrong.* `kin/readform.kin`'s `read-tagged` (a custom `#tagname` reader tag,
    deferred) builds a metadata map
    `{:flint/read-form .. :flint/read-tag .. :flint/read-var .. :line ..
-   :column .. :file ..}` -- `kin/readsq.kin`'s `sq-gensym` (an auto-gensym
-   inside syntax quote, also deferred) builds the same shape for the same
-   reason, both being a "resolve this later" marker. Checked by hand (one
-   `deferred-read` call, `flint.driver.host-reader`, against
-   `flint.project/preread` on the same text and tag map): for `#pt [1 2]`
-   with a tag `pt` bound to `a/point`, the kin reader and the guest answer
-   the SAME bytes in every respect but the order the string table lists
-   `read-form`/`read-tag`/`read-var` in -- the guest lists them in the
-   literal's own order (array-map, insertion order, <=8 entries), the kin
-   reader in a different order, which moves every string-table index after
-   it and so the whole byte string. Not in `bin/check-reader`'s 489-read
-   sweep: no `deps.edn` in this tree declares `:flint/tag-readers`
-   (`test/tags.clj`'s fixtures write their own, in a temp dir the sweep does
-   not reach), so this is a real gap in "every one byte-identical" rather
-   than something that sweep already disproves. Out of scope for this
-   migration (a kin-generated-code question, not a driver one); recorded so
-   the next person reading "489 reads, 0 differ" does not read it as
-   covering reader tags.
+   :column .. :file ..}`. Checked by hand at the time (one `deferred-read`
+   call, `flint.driver.host-reader`, against `flint.project/preread` on the
+   same text and tag map): for `#pt [1 2]` with a tag `pt` bound to `a/point`,
+   the kin reader and the guest answered DIFFERENT bytes, and the entry here
+   used to say why: "the same bytes in every respect but the order the string
+   table lists `read-form`/`read-tag`/`read-var` in". **That characterisation
+   was never verified against the actual bytes, and it was wrong.** Re-derived
+   2026-10-08 by actually comparing the two sides byte for byte (added
+   `test/reader/tagged-custom.fln` and a `:test/echo` binding, scoped to that
+   one file, to `cli/src/kin_reader_test.rs`'s sweep -- `TEST_TAGS`/
+   `TEST_TAG_PREFIX`, copied by hand into `RtReader.java`,
+   `runtimes/clr/conform/RtReader.cs` and `test/wasm-reader.mjs`, since none
+   of the four reader test harnesses are kin-generated): the two sides do not
+   reorder entries both already have -- the kin reader's string table was
+   missing exactly THREE entries the guest's had (`"<string>"`, `"line"`,
+   `"column"`), and every entry both sides DID have was already in the same
+   order.
+
+   **One real cause, found and fixed.** `:flint/read-var`'s VALUE -- `target`,
+   the var a tag resolves to -- is read out of the WORKSPACE'S tag map as-is,
+   metadata and all, and what metadata it carries depends on how that map was
+   built. A host that parses `deps.edn`'s `:flint/tag-readers` with the full
+   reader stamps its symbols with `:line`/`:column`/`:file` as it would any
+   other form it reads (`:file` falling back to `reader.cljc`'s own
+   `"<string>"` default when the build path gives no file, which is what
+   `flint.selfhost/main`'s `:workspaces`-in-EDN spec protocol does); a host
+   that reads it with a small tokenizer (`cli/src/resolve.rs`, the native
+   CLI's real path) or builds the map programmatically attaches none. Fixed
+   in both readers: `target` is stripped of its metadata (`with-meta target
+   nil` / kin's `with-meta rt target0 NIL`) before use, in
+   `src/flint/reader.cljc` and `kin/readform.kin` alike, so `:flint/read-var`
+   carries the SAME symbol regardless of how the caller's tags map happened
+   to be constructed. *What proves it:* re-running the fixture before and
+   after this change on its own (`FLINT_READER_ONLY=tagged-custom`) shows the
+   guest's own bytes shrink by exactly the 30 bytes this stray metadata cost
+   (449 -> 419 for the single-form version of the fixture), and re-running
+   the FULL 489-file sweep after the change (`cargo test --release -p
+   flint-cli kin_reader`) still reports 0 differ on every file but this new
+   one -- the fix changes no byte anywhere else.
+
+   **A second divergence was found in the same fixture and is NOT fixed.**
+   Even with the leak above closed, `test/reader/tagged-custom.fln` still
+   disagrees (`bytes differ at 4`, the string-table count: the kin reader's
+   table is still missing `"line"`/`"column"`). Traced this far: the OUTER
+   read loop re-stamps read-tagged's already-complete metadata map with the
+   enclosing form's own position (`stamp`/`stamp-root` -- "a position already
+   there wins" by being merged LAST, not by skipping the merge), on both
+   sides, by the same documented design (`kin/readform.kin`'s
+   `push-position-meta`, `src/flint/reader.cljc`'s `stamp` calling
+   `position-meta`); that merge's `transient` call promotes even a small
+   array map to a CHAMP on EITHER side (`kin/maptrans.kin`: "AN ARRAY-MAP IS
+   PROMOTED FIRST... there is one transient implementation and it is the
+   trie's" -- and the guest's own `lib/clojure/core.cljc` `merge` does the
+   same `(transient (first ms))`). Past that point the kin reader's own
+   reconstruction check (`pos-parts`) accepts the resulting 7-key map for the
+   compact position encoding, while the guest's rejects it for the same map
+   -- read byte for byte, DIRECTLY (a temporary `panic!` dump of the merged
+   map's own key order inside `pos_parts`, reverted after reading it): kin's
+   candidate comes out `[line read-tag read-var read-form column child-pos
+   file]`, an order neither side's hand-written code predicts from reading it
+   alone. `test/reader/tagged.fln`'s `#flint/table` goes through the exact
+   same merge, with a BUILT-IN tag's target, and does not show this -- so
+   whatever it is, it is specific to a target resolved from a WORKSPACE map,
+   not to custom tags or child positions as such, and locating it exactly
+   would mean instrumenting the guest's self-hosted `pos-parts` the same way,
+   which this session did not reach. **Left loud, not silent, and not
+   gating:** `cli/src/kin_reader_test.rs` and its three hand-copies report
+   this one file's mismatches as "KNOWN GAP" rather than folding them into
+   the pass/fail count, so a regression anywhere else still fails
+   `bin/check-reader`, and the next person has the exact byte offset, the
+   exact key order, and the ruled-out cause to start from rather than a
+   one-line guess.
+
+   Was NOT, and still is not, in the general 489-file sweep otherwise -- no
+   `deps.edn` under `lib/`, `src/`, `corpus/` or the test fixtures declares
+   `:flint/tag-readers` (`test/tags.clj`'s own fixtures write theirs in a
+   temp dir the sweep does not reach) -- but the one fixture added above now
+   exercises the shape that was missing, and reports what it finds instead of
+   going unchallenged.
 
    **Resolved 2026-10-07: canonical Clojure's own behaviour, no better option
    found.** Real Clojure shares ONE counter (`clojure.lang.RT/nextID`) across
@@ -18253,13 +18315,32 @@ the deliberately-unflagged one (both checked above).
 
 ### What is not claimed
 
-**`:to :clr` was not included in the byte-identity proof**, and not because
-of a build path. Compiling the SAME program from the SAME checkout TWICE
-(`fannkuch` to `:to :clr`) already produced two different `.dll`s -- same
-size, differing from byte 385 and cascading into most of the file. That is a
-pre-existing, unrelated non-determinism in flint's own CLR writer (almost
-certainly a module-version GUID or PE timestamp `src/flint/clr.cljc` or the
-native CLI mints fresh per compile), and fixing it is out of scope here.
+**`:to :clr` was not in the original byte-identity proof above, and the entry
+that used to stand here was wrong.** It read: compiling the SAME program from
+the SAME checkout TWICE (`fannkuch` to `:to :clr`) already produced two
+different `.dll`s -- same size, differing from byte 385 and cascading into
+most of the file -- guessed to be "a pre-existing, unrelated non-determinism
+in flint's own CLR writer (almost certainly a module-version GUID or PE
+timestamp)". **Re-checked 2026-10-08: that comparison held the output path
+constant in neither run.** `bin/check-clr`'s own fixed program, compiled twice
+to two DIFFERENTLY-NAMED paths (`a.dll`, `b.dll`), differs at exactly 2 bytes
+-- the module name string the assembly is SUPPOSED to take from `:out`, which
+is not a bug (`DECISIONS.md#reproducible-build-paths`'s own `check-build-paths`
+proof above is the same shape of mistake this file warns against reproducing:
+an A/B whose output path is not held constant reads like the thing being
+measured). `fannkuch` to `:to :clr`, compiled twice to the SAME path in two
+directories (so the second compile is not comparing against itself), five
+times in a loop, and four more corpus programs (`nqueens`, `life`,
+`mandelbrot`, `nbody`, `lzw`) each twice: every pair `cmp`-identical, zero
+exceptions. `src/flint/clr.cljc`'s PE timestamp is already a hardcoded `(u32
+0)`, its Module-table MVID a fixed constant (`:guid (concat (u32 0x5f544e4c)
+..)`, not a fresh GUID per compile), and the file has no `:file`/path-valued
+field anywhere (`grep -n ":file\\|source-path\\|abs-path" src/flint/clr.cljc`,
+no hits) -- there was never a GUID or timestamp source for the writer to leak.
+**`:to :clr` is already byte-reproducible**, and `bin/check-clr` now proves it
+on every run (two same-path compiles, `cmp`), closing the gap the table above
+still (correctly) says this decision does not cover for the OTHER targets'
+proof, since this one lives in the target's own gate instead.
 
 **`runtimes/clr/src`'s own `Flint.dll` (the CLR runtime, built on demand by
 `bin/check-clr`/`bin/conform-hosts`, not by anything that ships it) DOES

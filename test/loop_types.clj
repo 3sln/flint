@@ -41,31 +41,50 @@
   (let [r @(p/process ["./bin/flint" ":src" dir ":fn" "p/main" ":out" (str dir "/p.wasm")]
                       {:out :string :err :string
                        :extra-env {"PROBE_OUT" out "FLINT_PRELOAD" "test/loop_types_probe.clj"}})
-        c (edn/read-string (slurp out))
+        data (try (edn/read-string (slurp out))
+                  (catch Exception e
+                    {:ran? false :error (str "PROBE_OUT unreadable: " e)}))
+        ;; A STRUCTURED FAILURE IS CHECKED ONCE, NOT NINE TIMES. The probe's
+        ;; shutdown hook used to write `(pr-str @counts)` alone, so a probe
+        ;; that never got to watch a compile (hooks failed to install, or any
+        ;; later uncaught exception in that JVM) left `counts` at `{}` --
+        ;; indistinguishable from a program with no integer-opcode arithmetic
+        ;; at all. Every row below then read its own missing counts as a
+        ;; regression in loop-type inference and failed, nine symptoms of one
+        ;; cause. `test/loop_types_probe.clj` now reports `{:ran? :error
+        ;; :counts}` explicitly, so a probe failure is one loud, named check
+        ;; here and the per-row checks are skipped rather than restating it.
+        probe-ran? (and (map? data) (true? (:ran? data)) (nil? (:error data)))
+        c (if probe-ran? (:counts data) {})
         n (fn [f op outcome] (get c [f op outcome] 0))
         missed (fn [f] (reduce + (for [[[g _ o] k] c :when (and (= g f) (not= o :specialised))] k)))]
     (check "the probe compiled the program" (zero? (:exit r)))
-    (check "counter: both adds and the compare specialise, none missed"
-           (and (= 2 (n "counter" "flint/add" :specialised))
-                (= 1 (n "counter" "flint/lt" :specialised))
-                (zero? (missed "counter"))))
-    (check "float-beside: the int counter survives a float slot beside it"
-           (and (= 1 (n "float-beside" "flint/add" :specialised))
-                (= 1 (n "float-beside" "flint/lt" :specialised))))
-    (check "float-beside: the float slot is proved a float, so (* z z) is [float float]"
-           (= 1 (n "float-beside" "flint/mul" [:float :float])))
-    (check "untyped-beside: the counter survives a slot an untyped parameter spoils"
-           (= 1 (n "untyped-beside" "flint/lt" :specialised)))
-    (check "untyped-beside, CONTROL: that slot is NOT claimed, so (* z z) stays untyped"
-           (= 1 (n "untyped-beside" "flint/mul" [nil nil])))
-    (check "three-args: (* a b c) is two typed multiplies"
-           (= 2 (n "three-args" "flint/mul" :specialised)))
-    (check "float-three: (* 2.0 z x) keeps z a float through the fold"
-           (= 2 (n "float-three" "flint/mul" [:float :float])))
-    (check "widens, CONTROL: a slot that starts int and recurs a float is not an int"
-           (pos? (n "widens" "flint/add" [nil :float])))
-    (check "untyped, CONTROL: unknown operands do not specialise"
-           (= 1 (n "untyped" "flint/add" [nil nil]))))
+    (check (str "the probe actually ran and watched the compile"
+                (when-not probe-ran?
+                  (str " -- PROBE DID NOT RUN: " (or (:error data) data) " / stderr: " (:err r))))
+           probe-ran?)
+    (when probe-ran?
+      (check "counter: both adds and the compare specialise, none missed"
+             (and (= 2 (n "counter" "flint/add" :specialised))
+                  (= 1 (n "counter" "flint/lt" :specialised))
+                  (zero? (missed "counter"))))
+      (check "float-beside: the int counter survives a float slot beside it"
+             (and (= 1 (n "float-beside" "flint/add" :specialised))
+                  (= 1 (n "float-beside" "flint/lt" :specialised))))
+      (check "float-beside: the float slot is proved a float, so (* z z) is [float float]"
+             (= 1 (n "float-beside" "flint/mul" [:float :float])))
+      (check "untyped-beside: the counter survives a slot an untyped parameter spoils"
+             (= 1 (n "untyped-beside" "flint/lt" :specialised)))
+      (check "untyped-beside, CONTROL: that slot is NOT claimed, so (* z z) stays untyped"
+             (= 1 (n "untyped-beside" "flint/mul" [nil nil])))
+      (check "three-args: (* a b c) is two typed multiplies"
+             (= 2 (n "three-args" "flint/mul" :specialised)))
+      (check "float-three: (* 2.0 z x) keeps z a float through the fold"
+             (= 2 (n "float-three" "flint/mul" [:float :float])))
+      (check "widens, CONTROL: a slot that starts int and recurs a float is not an int"
+             (pos? (n "widens" "flint/add" [nil :float])))
+      (check "untyped, CONTROL: unknown operands do not specialise"
+             (= 1 (n "untyped" "flint/add" [nil nil])))))
   ;; The ANSWER, through the real CLI, since everything above is about code
   ;; that must compute the same thing whether or not it specialised.
   (let [r @(p/process ["target/release/flint" "run" ":path" dir ":fn" "p/main"] {:out :string :err :string})]
