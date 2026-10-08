@@ -113,7 +113,7 @@ this block.
 - [pin-the-babashka-version](#pin-the-babashka-version) -- A test-methodology trap found while verifying, recorded so it is not repeated.
 - [gate-timings](#gate-timings) -- Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew, and two earlier figures corrected.
 - [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
-- [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not included in the byte-identity proof
+- [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not in the original byte-identity proof above, and the entry that used to stand here was wrong.
 <!-- TOC:END -->
 
 ---
@@ -18069,13 +18069,32 @@ the deliberately-unflagged one (both checked above).
 
 ### What is not claimed
 
-**`:to :clr` was not included in the byte-identity proof**, and not because
-of a build path. Compiling the SAME program from the SAME checkout TWICE
-(`fannkuch` to `:to :clr`) already produced two different `.dll`s -- same
-size, differing from byte 385 and cascading into most of the file. That is a
-pre-existing, unrelated non-determinism in flint's own CLR writer (almost
-certainly a module-version GUID or PE timestamp `src/flint/clr.cljc` or the
-native CLI mints fresh per compile), and fixing it is out of scope here.
+**`:to :clr` was not in the original byte-identity proof above, and the entry
+that used to stand here was wrong.** It read: compiling the SAME program from
+the SAME checkout TWICE (`fannkuch` to `:to :clr`) already produced two
+different `.dll`s -- same size, differing from byte 385 and cascading into
+most of the file -- guessed to be "a pre-existing, unrelated non-determinism
+in flint's own CLR writer (almost certainly a module-version GUID or PE
+timestamp)". **Re-checked 2026-10-08: that comparison held the output path
+constant in neither run.** `bin/check-clr`'s own fixed program, compiled twice
+to two DIFFERENTLY-NAMED paths (`a.dll`, `b.dll`), differs at exactly 2 bytes
+-- the module name string the assembly is SUPPOSED to take from `:out`, which
+is not a bug (`DECISIONS.md#reproducible-build-paths`'s own `check-build-paths`
+proof above is the same shape of mistake this file warns against reproducing:
+an A/B whose output path is not held constant reads like the thing being
+measured). `fannkuch` to `:to :clr`, compiled twice to the SAME path in two
+directories (so the second compile is not comparing against itself), five
+times in a loop, and four more corpus programs (`nqueens`, `life`,
+`mandelbrot`, `nbody`, `lzw`) each twice: every pair `cmp`-identical, zero
+exceptions. `src/flint/clr.cljc`'s PE timestamp is already a hardcoded `(u32
+0)`, its Module-table MVID a fixed constant (`:guid (concat (u32 0x5f544e4c)
+..)`, not a fresh GUID per compile), and the file has no `:file`/path-valued
+field anywhere (`grep -n ":file\\|source-path\\|abs-path" src/flint/clr.cljc`,
+no hits) -- there was never a GUID or timestamp source for the writer to leak.
+**`:to :clr` is already byte-reproducible**, and `bin/check-clr` now proves it
+on every run (two same-path compiles, `cmp`), closing the gap the table above
+still (correctly) says this decision does not cover for the OTHER targets'
+proof, since this one lives in the target's own gate instead.
 
 **`runtimes/clr/src`'s own `Flint.dll` (the CLR runtime, built on demand by
 `bin/check-clr`/`bin/conform-hosts`, not by anything that ships it) DOES
