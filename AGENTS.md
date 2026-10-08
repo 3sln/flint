@@ -62,7 +62,7 @@ artefact does not announce itself; it presents as a real finding.
 
 | What you changed | What must be rebuilt, in order |
 |---|---|
-| `src/` — the COMPILER | `bin/build-dist`, then `cargo build --release -p flint-cli`, then `FLINT_DIST_FRESH=1 ./sdks/cli/build`, then `./sdks/esm/build` |
+| `src/` — the COMPILER | `bin/build-dist`, then `bin/build-cli`, then `FLINT_DIST_FRESH=1 ./sdks/cli/build`, then `./sdks/esm/build` |
 | `lib/` — the stdlib | same order as `src/`, above |
 | unit modules | `bin/build-units` |
 
@@ -87,6 +87,15 @@ test to show it — the test was written against the old behaviour. Confirming
 a bug and confirming its fix are different acts, and measuring at the
 boundary the decision is about (the shipped artefact, not `ns/instruction`,
 which factors out process start and warmup) is what tells you which you did.
+
+`bin/build-cli` is `cargo build --release -p flint-cli` with the checkout path
+and cargo-registry path remapped to stable placeholders
+(`DECISIONS.md#reproducible-build-paths`) — call it instead of the bare
+command, and everything else in this tree that builds the same crate
+(`bin/test`, `bin/conform-hosts`, CI's `binaries.yml`) does the same, because a
+second invocation of the same package with different `RUSTFLAGS` invalidates
+cargo's cache for it rather than reusing what the first one built.
+
 
 ## 4. The gate is the last check, not the first
 
@@ -185,7 +194,7 @@ order:
 
     export JAVA_HOME=/opt/homebrew/opt/openjdk   # bin/build-dist shells out to a JVM; /usr/bin/java on macOS is a stub
     cd ../flint-<topic>
-    ./bin/build-dist && cargo build --release -p flint-cli
+    ./bin/build-dist && bin/build-cli
     ./sdks/esm/build && ./bin/check-ports
 
 `bin/build-dist` also requires the `clojure` CLI, pinned by

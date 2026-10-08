@@ -1,0 +1,15 @@
+#!/bin/sh
+# The native CLI, with the checkout path and cargo-registry path remapped so
+# `target/release/flint` comes out byte-identical regardless of where this
+# tree was checked out or whose $HOME built it
+# (DECISIONS.md#reproducible-build-paths). AGENTS.md's rebuild table and
+# worktree setup call this instead of a bare `cargo build --release -p
+# flint-cli`, and so does everything else in this tree that builds the same
+# crate (`bin/test`, `bin/conform-hosts`, CI's binaries.yml) -- a second,
+# differently-flagged invocation of the same package invalidates cargo's
+# cache for it, so every caller has to agree on the flags or every other
+# caller pays for a rebuild it did not ask for.
+set -e
+cd "$(dirname "$0")/.."
+export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
+exec cargo build --release -p flint-cli "$@"

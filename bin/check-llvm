@@ -131,6 +131,8 @@ EOF
 PROGS="arith colls hof strs handler deep park"
 
 echo "  the archive an emitted module links against"
+# Remapped for the reason `bin/build-cli` is (DECISIONS.md#reproducible-build-paths).
+export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
 cargo build --release -p flint-native-abi > /tmp/flint-llvm-cargo.log 2>&1 \
   || { tail -20 /tmp/flint-llvm-cargo.log; fail "cargo build -p flint-native-abi"; }
 

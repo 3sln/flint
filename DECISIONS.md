@@ -113,6 +113,7 @@ this block.
 - [pin-the-babashka-version](#pin-the-babashka-version) -- A test-methodology trap found while verifying, recorded so it is not repeated.
 - [gate-timings](#gate-timings) -- Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew, and two earlier figures corrected.
 - [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
+- [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not included in the byte-identity proof
 <!-- TOC:END -->
 
 ---
@@ -17949,3 +17950,149 @@ specific to either incident above: the two arms agree **exactly** (a
 comparison that cannot tell its arms apart is not evidence they are equal),
 and a test that fails on a port but passes on native right after a
 native-only change (the port's build is what is stale).
+## reproducible-build-paths
+
+**Ratified:** ☐ not signed off
+
+**Status: built 2026-10-08.** `bin/rust-remap-flags` is the one definition of
+a `--remap-path-prefix` pair (checkout root, cargo-registry root), read by
+`bin/build-units`, the new `bin/build-cli` (which `AGENTS.md`'s rebuild table
+and worktree setup now call instead of a bare `cargo build --release -p
+flint-cli`), `sdks/c/build`, `bin/check-llvm`, and
+`.github/workflows/binaries.yml`'s release matrix. `bin/test` and
+`bin/conform-hosts`'s own native builds were switched to `bin/build-cli` too,
+so there is only ever one `RUSTFLAGS` for that crate in this tree -- a second,
+differently-flagged invocation invalidates cargo's fingerprint for it, so a
+caller that disagreed would make every OTHER caller pay for a rebuild it did
+not ask for. `cli/src/main.rs`'s `stdlib_text` no longer resolves `lib/`
+through `env!("CARGO_MANIFEST_DIR")`. `bin/check-build-paths` greps the
+shipped artifacts for this checkout's own path and `$HOME/.cargo`, and runs in
+`bin/check`'s fast tier.
+
+### What was found
+
+Two `git worktree add --detach` checkouts of the same commit
+(`fcfd4bca`), one at `.../flint-repro-paths` and one at a second path padded
+with 36 extra characters, built identically otherwise (`JAVA_HOME` set,
+`bin/build-dist` then `cargo build --release -p flint-cli`) produced
+DIFFERENT BYTES for every Rust-built artifact:
+
+| artifact | A (shorter path) | B (longer path) | agreement |
+|---|---|---|---|
+| `dist/flint-runtime.wasm` | 859 020 B | 858 556 B | differ by 464 B |
+| `dist/flintc.wasm` | 938 321 B | 938 209 B | differ by 112 B |
+| `dist/flintc.bytecode` | 277 931 B | 277 931 B | **identical** |
+| `target/release/flint` | 5 388 192 B | 5 388 192 B | same size, 1 842 180 of 5 388 192 bytes differ (`cmp -l`) |
+
+`dist/flintc.bytecode` was already identical -- it is the self-hosted
+compiler's own bytecode image, produced by the compiler compiling itself, and
+carries no Rust path at all. Everything Rust builds did not agree, confirmed
+by `strings`/`grep -a` on each: `runtime/src/{vm,rt}.rs` and other `runtime/`
+sources appeared with the full absolute checkout path ahead of them (the
+`file!()` location `panic!`/`unwrap()`/`assert!` expand to), and
+`target/release/flint` additionally carried `$HOME/.cargo/registry/src/...`
+for `anyhow`, `base64`, `bytes`, `bzip2` and others -- the registry-dependency
+equivalent of the same thing. The rustup/rustc SYSROOT was not part of the
+problem: the standard library's own locations already read
+`/rustc/<commit-hash>/library/...`, baked in by the Rust project's own release
+build and identical for anyone running that exact rustc -- confirmed identical
+across both checkouts without any change here.
+
+### The fix, and the one it could not be
+
+`trim-paths` is cargo's purpose-built answer to exactly this, and was tried
+first because it needs no absolute path to be named. It failed on contact:
+`[profile.release] trim-paths = "all"` in this workspace's `Cargo.toml`, built
+with the STABLE cargo this repo's own documented command uses, refused with
+
+    error: failed to parse manifest ... feature `trim-paths` is required
+    The package requires the Cargo feature called `trim-paths`, but that
+    feature is not stabilized in this version of Cargo (1.92.0 (Homebrew)).
+
+checked directly rather than assumed from cargo 1.92's vintage. So
+`bin/rust-remap-flags` computes the equivalent `--remap-path-prefix` flags by
+hand, which IS stable, and every build site that produces a shipped artifact
+now exports `RUSTFLAGS` from it before calling cargo (or appends it to the
+direct `rustc` invocations in `bin/build-units`, which is a safe no-op there
+since those already pass repo-relative source paths and the FROM prefix never
+matches).
+
+That fix alone was not enough for `target/release/flint`: after it,
+`dist/flint-runtime.wasm` and `dist/flintc.wasm` became byte-identical across
+the two checkouts, but the native binary still differed (1 637 177 of
+5 388 192 bytes, barely changed from before). The remaining source was
+`cli/src/main.rs`'s `stdlib_text`, which built the real `lib/` path from
+`env!("CARGO_MANIFEST_DIR")` for a dev-only diagnostic
+(`FLINT_PREREAD=0`/`FLINT_SPEC_OUT`/`FLINT_CHECK_SPLIT`, read by
+`test/cli.clj` and `bin/conform-hosts`) and then printed it in an error
+message. `--remap-path-prefix` does not touch `env!()` expansions -- it
+rewrites `file!()`/debuginfo locations, which are a different compiler
+mechanism -- so that literal stayed the builder's absolute checkout path in
+every release of this binary regardless of `RUSTFLAGS`. Every caller of those
+env vars already runs `./target/release/flint` from the repo root
+(`test/cli.clj`'s `ProcessBuilder`, `bin/conform-hosts`), so resolving `lib/`
+against the CURRENT DIRECTORY instead is not just reproducible, it is the
+more correct answer for what the hook is actually measuring. After that
+change, `target/release/flint` came out byte-identical too.
+
+### A locale trap found while building the guard that checks for this
+
+`bin/check-build-paths` greps shipped artifacts for the checkout's own path
+and `$HOME/.cargo`. The first version used `grep -qaF`, and it PASSED on a
+binary deliberately built with the old, unflagged `cargo build --release -p
+flint-cli` -- built on purpose to verify the guard, per `AGENTS.md` section 3.
+`python3`'s byte-level `bytes.count()` on the same file found the checkout
+path twice and `$HOME/.cargo` 167 times; the native macOS `grep -a`
+(`/usr/bin/grep`, BSD-derived) found neither, silently, exit 1 -- the same
+exit code a clean binary gives. `LC_ALL=C grep -qaF` found both immediately.
+The ambient locale was treating the binary's non-UTF-8 byte runs as malformed
+multibyte sequences and dropping the match rather than erroring, which is
+exactly `AGENTS.md` section 5's "fails open": a broken check and a working one
+produced the same passing output, and the only way to tell them apart was to
+make the bypass real and run it. The script now sets `LC_ALL=C` itself rather
+than trusting the caller's environment.
+
+### Proof
+
+Two worktrees, same commit, checkout paths differing by 36 characters;
+rebuilt through `bin/build-dist` + `bin/build-cli` in both. Byte-identical
+(`cmp`): `dist/flint-runtime.wasm`, `dist/flint-runtime-aot.wasm`,
+`dist/flint-loader.wasm`, `dist/flintc.wasm`, `dist/flintc.bytecode`,
+`target/release/flint`. Six corpus programs with no `:corpus/diverges`
+(`fannkuch`, `nqueens`, `life`, `mandelbrot`, `nbody`, `lzw`) compiled from
+each checkout with that checkout's own binary, `:to :wasm` and `:to :llvm`:
+all twelve outputs byte-identical across checkouts (`fannkuch.wasm` 712 772 B,
+`fannkuch.ll` 74 462 B, and so on). `fannkuch` to `:to :jvm`
+(`flint/Artifact.class`, 41 748 B) byte-identical too.
+`./bin/check-build-paths` passes against the fixed build and fails against
+the deliberately-unflagged one (both checked above).
+
+### What is not claimed
+
+**`:to :clr` was not included in the byte-identity proof**, and not because
+of a build path. Compiling the SAME program from the SAME checkout TWICE
+(`fannkuch` to `:to :clr`) already produced two different `.dll`s -- same
+size, differing from byte 385 and cascading into most of the file. That is a
+pre-existing, unrelated non-determinism in flint's own CLR writer (almost
+certainly a module-version GUID or PE timestamp `src/flint/clr.cljc` or the
+native CLI mints fresh per compile), and fixing it is out of scope here.
+
+**`runtimes/clr/src`'s own `Flint.dll` (the CLR runtime, built on demand by
+`bin/check-clr`/`bin/conform-hosts`, not by anything that ships it) DOES
+embed this checkout's absolute path** -- not as a panic location but as the
+CodeView debug directory's reference to its own `.pdb`:
+`.../runtimes/clr/src/obj/Release/net10.0/Flint.pdb`, found by `grep -a` on
+the built `Flint.dll`. Confirmed and left unfixed, deliberately: nothing in
+this tree publishes this assembly (no `dotnet pack`, no release attachment --
+checked by grepping `.github/workflows/` for both), so the path it leaks is
+always the building developer's own, read back only by their own debugger on
+their own machine, the same category `flint-native-abi` is already in
+(source-shipped, user-built, user's-own-path). `dist/flint-rt.jar` (the JVM
+runtime, which IS prebuilt into `dist/`) was checked the same way and carries
+no such path -- `javac`'s `SourceFile` attribute is a bare filename, not an
+absolute one, by default.
+
+**Only Rust-built artifacts and the two managed-runtime artifacts above were
+audited.** `sdks/esm` and `sdks/cli`'s own build scripts were checked and do
+not invoke cargo or rustc themselves -- they copy `dist/`'s already-fixed
+files -- so they were not re-audited independently.
