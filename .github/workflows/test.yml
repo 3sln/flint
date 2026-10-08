@@ -139,4 +139,8 @@ jobs:
           # Self-hosting on the ports is 179 s on the JVM and 704 s on the CLR
           # against about a minute for everything else, so it defaults off.
           FLINT_SELFHOST: ${{ inputs.selfhost && '1' || '0' }}
+          # test/door-agreement.clj compiles only `nbody` by default (the whole
+          # corpus was 45 min on a loaded dev machine); the gate on CI runs all
+          # of it, since a door disagreement on one program is still a bug.
+          FLINT_DOORS_CORPUS: all
         run: ./bin/test
