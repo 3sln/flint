@@ -46,7 +46,7 @@ NS_HEAD = r'\(ns\s+(?:\^\S+\s+)*'
 def namespaces():
     """Every guest-shipped namespace, by the name its own `ns` form gives.
 
-    Four shipped roots now (AGENTS.md's restructure note): `lib/stdcore`,
+    Four shipped roots now (`DECISIONS.md#four-units`): `lib/stdcore`,
     `lib/stdextra` and `lib/deps` all sit under `lib/`, and `cli/lib` is its
     own root outside it. `.fln` is the stdlib's own extension
     (`DECISIONS.md#dialects-and-preludes`); `.cljc` is still used by

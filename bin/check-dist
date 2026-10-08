@@ -44,8 +44,7 @@
 ;; compiled, and this compares it with the tree. ONE DIGEST FUNCTION, here;
 ;; `build-dist` calls `--digest` rather than restating it. Every file under
 ;; all three roots counts, tracked or not, because the build reads the
-;; directory and not git. `cli/lib` is its own root now (AGENTS.md's
-;; restructure note) -- `lib/**` still covers `lib/stdcore`, `lib/stdextra`
+;; directory and not git. `cli/lib` is its own root now (`DECISIONS.md#four-units`) -- `lib/**` still covers `lib/stdcore`, `lib/stdextra`
 ;; and `lib/deps`, which sit under `lib/`.
 (def stamp
   "Overridable so `test/check-dist.clj` can hand it a wrong stamp without

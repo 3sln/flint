@@ -81,7 +81,7 @@
 (def slots (into {} (map (fn [[k v]] [(str k) v])
                          (edn/read-string (str/replace (slurp "dist/slots.json")
                                                        #"\"([^\"]+)\":" "\"$1\" ")))))
-;; The four shipped roots (AGENTS.md's restructure note) merged into one map,
+;; The four shipped roots (`DECISIONS.md#four-units`) merged into one map,
 ;; keyed by the ns-relative path within its own root -- `lib/stdextra/clojure/core.fln`
 ;; becomes `"clojure/core.fln"`, same as `lib/deps/flint/deps.cljc` becomes
 ;; `"flint/deps.cljc"` -- so `find-src` below can look a namespace up without
@@ -103,7 +103,10 @@
                                  [".fln" ".cljc" ".clj"])))
         {:keys [sources order]} (project/resolve-project find-src (symbol (namespace entry)) #{:flint})
         r (compiler/compile-image
-           {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e)) :file (:file (val e))}]) sources))
+           {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e)) :file (:file (val e))
+                                                       ;; `defalias` needs the answer's dialect
+                                                       ;; (`DECISIONS.md#defalias`).
+                                                       :dialect (:dialect (val e))}]) sources))
             :order (vec (filter sources order)) :entry entry
             :builtins (set (keys slots)) :features #{:flint}})]
     {:used (set (img/natives (:builder r))) :image (img/emit (:builder r) slots)}))

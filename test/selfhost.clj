@@ -10,6 +10,7 @@
 (babashka.classpath/add-classpath "src")
 (require '[flint.compiler.core :as compiler] '[flint.compiler.image :as img] '[flint.compiler.link :as link]
          '[flint.compiler.reader :as reader] '[flint.compiler.imgread :as imgread]
+         '[flint.compiler.resolve :as project]
          '[clojure.java.io :as io] '[clojure.string :as str]
          '[babashka.fs :as fs])
 
@@ -21,7 +22,11 @@
 (defn find-source [dirs n]
   (some (fn [d] (some (fn [ext]
                         (let [f (io/file d (str (ns->path n) ext))]
-                          (when (.exists f) {:src (slurp f) :file (str f)})))
+                          ;; THE DIALECT, as every resolver answers it: `defalias` is
+                          ;; refused in any namespace not answered `:flint`
+                          ;; (`DECISIONS.md#defalias`), and `clojure.core` uses it.
+                          (when (.exists f) {:src (slurp f) :file (str f)
+                                             :dialect (project/dialect-of (str f))})))
                       ;; Most specific first (`DECISIONS.md#dialects-and-preludes`):
                       ;; a namespace may have both a `.fln` and a `.cljc`.
                       [".fln" ".cljc" ".clj"]))
@@ -44,8 +49,10 @@
                         [n (let [forms (reader/read-all src {:file file :features #{:flint}})
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                              (set (remove virtual (when nsform (compiler/ns-requires nsform)))))]))]
-    (cons 'clojure.core
-          (remove #{'clojure.core}
+    ;; `core-first`, the real pin, not `clojure.core` consed on the front: the
+    ;; pin is `flint.core.impl` first now (`DECISIONS.md#four-units`).
+    (project/core-first
+          (identity
                   (loop [done [] seen #{} pending (vec (keys deps))]
                     (if (empty? pending)
                       done
@@ -59,7 +66,7 @@
                   k (keys (:provides u))]
               k)))
 
-;; The four shipped roots (AGENTS.md's restructure note), plus `src` for the
+;; The four shipped roots (`DECISIONS.md#four-units`), plus `src` for the
 ;; compiler's own namespaces -- `lib` used to be the one stdlib root.
 (def dirs ["src" "lib/stdcore" "lib/stdextra" "lib/deps" "cli/lib"])
 (def entry 'flint.compiler.selfhost/main)
