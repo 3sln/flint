@@ -11,8 +11,9 @@ const compiler = await Compiler.load();
 
 // Source comes from a RESOLVER, not a `files` map -- see "Compiling" below.
 // `stdextra()` is the optional half of the standard library (`clojure.set`,
-// `clojure.edn`, `flint.host`, and the rest); `clojure.core` and seven other
-// namespaces are answered by the SDK itself and never put to `resolve` at all.
+// `clojure.edn`, `flint.host`, and the rest); `clojure.core` and eight other
+// namespaces (including `flint.check`) are answered by the SDK itself and
+// never put to `resolve` at all.
 const image = await compiler.compile({
   fn: 'app/main',
   resolve: chain(stdextra(), fromMap({
@@ -89,12 +90,13 @@ where. Promises are fine anywhere a plain answer is: `resolve` may return one,
 and `chain` and the SDK wait on it.
 
 **stdcore is always present and is never asked of `resolve`.** `clojure.core`
-and seven other namespaces (`stdcoreNamespaces()` lists them) are answered by
-the SDK's own embedded copy before `resolve` is consulted at all -- not asked
-and ignored, there is no path to a host's answer for those names overriding
-them. The rest of the standard library -- `clojure.set`, `clojure.edn`,
-`flint.host`, and the rest -- is `stdextra()`, imported separately from
-`@3sln/flint/stdextra` and composed in explicitly:
+and eight other namespaces (`stdcoreNamespaces()` lists them, and
+`flint.check` is one of them) are answered by the SDK's own embedded copy
+before `resolve` is consulted at all -- not asked and ignored, there is no
+path to a host's answer for those names overriding them. The rest of the
+standard library -- `clojure.set`, `clojure.edn`, `flint.host`, and the rest
+-- is `stdextra()`, imported separately from `@3sln/flint/stdextra` and
+composed in explicitly:
 
 ```js
 import { stdextra } from '@3sln/flint/stdextra';
@@ -105,10 +107,16 @@ It is its own module so that a program which never imports
 `@3sln/flint/stdextra` never carries its bytes -- a bundler can tree-shake it
 away without having to prove anything pure.
 
-**Checks need it.** Checks are on by default, and their runtime, `flint.check`,
-is in stdextra -- so a resolver without `stdextra()` gets `no source for
-flint.check` unless the compile says `checks: false` (or `optimize: ['perf']`,
-which drops them). The error says so.
+**Checks need no `stdextra()` at all.** `flint.check` is stdcore, not
+stdextra: it is meant to ALWAYS exist, so it is a root unconditionally and
+answered the same way `clojure.core` is, before any resolver -- including
+`stdextra()` -- is ever asked. `features`/`checks: false` only decide WHICH
+of `flint.check`'s two internal variants a compile resolves to, never
+whether the namespace itself is there: with checks off, `flint.check/expect`
+is a free no-op (the call expands to `nil`, so its argument is never
+evaluated), and a function like `flint.check/run-tests`, which only means
+something while actually running checks, throws "checks are not enabled in
+this build" instead.
 
 **Dialect**: when a namespace has source under more than one extension, `.fln`
 (flint's own dialect) wins over `.cljc` wins over `.clj`.

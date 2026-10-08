@@ -968,9 +968,12 @@
         ;; `roots*`, OVERRIDING `flint.project/project-roots`'s default only in
         ;; test mode: ordinary compiles pass `nil` and get `[clojure.core
         ;; entry-ns]`, which is the same set `(cons entry-ns ['clojure.core])`
-        ;; named here before. `flint.port`, `flint.wire` and, when checks are
-        ;; on, `flint.check` are added by `project-roots` itself now -- ONE
-        ;; list, read rather than restated (AGENTS.md sec. 1).
+        ;; named here before. `flint.port`, `flint.wire` and `flint.check` are
+        ;; added by `project-roots` itself now, UNCONDITIONALLY -- ONE list,
+        ;; read rather than restated (AGENTS.md sec. 1). `flint.check` always
+        ;; exists (`DECISIONS.md#checks`); `features` only selects which of
+        ;; its two internal variants its own `#?(:flint/check ...)` resolves
+        ;; to, not whether it is a root at all.
         roots* (when test-mode? (vec (cons 'clojure.core src-nses)))
         ;; `resolve-sources!` is `collect` + `refuse-guarded-requires!` +
         ;; `core-first (topo-order ..)`, all three now

@@ -151,11 +151,27 @@ These are ours to design. Nothing constrains the names but us.
 
 **Reviewed:** ☐ not signed off
 
-7 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build. Two things at once, and they are the same thing seen from two sides: * **Inline checks** against bad usage, so a library says what went wrong where it...
+7 public vars, 1 macro. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. Checks that cost nothing in a release build. Two things at once, and they are the same thing seen from two sides: * **Inline checks** against bad usage, so a library says what went wrong where it...
 
 **Is this public?** Required by 14 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. 14 compiled test programs require it -- more than any other namespace here. Reads as public API that was never manifested.
 
-**Change requests:** _none recorded_
+**Change requests:** The namespace's SHAPE changed (`DECISIONS.md#checks`,
+2026-10-07): `flint.check` now ALWAYS resolves, an unconditional compiler
+root like `flint.port`/`flint.wire`, instead of vanishing entirely under
+`:optimize [perf]`. Each of its 7 names keeps the same arity and the same
+KIND (macro or function) in both builds, chosen per name by an internal
+`#?(:flint/check A :default B)` rather than by the namespace's presence:
+`expect` stays a macro and expands to `nil` when checks are off (so its
+arguments are never evaluated); `check`, `explain`, `describe`,
+`failure-message` and `run-tests` stay ordinary functions and throw "checks
+are not enabled in this build" when checks are off (none of them has a
+sensible no-op answer -- there is no neutral "did this predicate pass"); and
+`test-var?` is identical in both builds, since it is a pure read of metadata
+the compiler indexes unconditionally. Worth a maintainer look because this is
+exactly the kind of boundary change this file exists to catch: the vars are
+the same seven, but what calling one of them MEANS now depends on a build
+flag in a way it did not before, and the "one surface, same across builds"
+guarantee is new.
 
 ## flint.cli
 

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# flint.check's ON and OFF variants must publish the same names, same kind.
+exec python3 "$(dirname "$0")/check_flint_check_surface.py" "$@"

@@ -12,6 +12,10 @@
 #                                  production build put back afterwards
 #   bin/release-gate     ~25 min   before a versioned release
 #
+# (one more static check as of `check-flint-check-surface`,
+# `DECISIONS.md#checks` -- a single-file regex pass, of the same shape as
+# the other sub-second checks in this loop)
+#
 # WHAT IS IN HERE WAS CHOSEN BY MEASURING, not by guessing. RE-MEASURED
 # 2026-09-26 at `5742ecde`: sixteen static checks, most sub-second, and four
 # heavier items -- `check-wedged` 9.4 s, `check-four-ops` 6.0 s,
@@ -55,7 +59,8 @@ t0=$(date +%s)
 
 for c in check-version check-contracts check-decisions check-flattens check-builtins check-sys-catalogue check-containment \
          check-snapshot-layout check-aotstat-layout check-port-consts check-artifact-ops \
-         check-generated-reached check-vocab-used check-esm-portable dead-runtime-fns check-toc-current; do
+         check-generated-reached check-vocab-used check-esm-portable dead-runtime-fns check-toc-current \
+         check-flint-check-surface; do
   ./bin/$c || fail "bin/$c"
 done
 

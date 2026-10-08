@@ -2692,6 +2692,127 @@ artifact the Rust CLI builds. The rest of the mechanism is shipped and was run:
 from `^:flint.check/test` metadata and reports `125/125 checks passed` (the
 suite has grown since the 53 named below).
 
+**2026-10-07: the maintainer revises the namespace's own shape, independent
+of the strip question above.** `flint.check` used to be absent ENTIRELY when
+checks are off -- the reader removed every `#?(:flint/check ...)` before the
+analyzer saw it, and `flint.project/project-roots` added `flint.check` as a
+root only `(contains? features :flint/check)`, so the two were the same fact
+told twice: no conditional code, no namespace to hold it. That made the
+namespace unusable from outside a reader conditional -- a test-definition
+helper, or a macro like `expect` wrapping a form that itself calls
+`flint.check/something`, could not name it without ALSO wrapping the call
+site in `#?(:flint/check ...)`, on pain of "unable to resolve symbol" the
+moment someone built with `[perf]`.
+
+**`flint.check` now ALWAYS EXISTS.** It is a compiler root unconditionally,
+the same way `flint.port`/`flint.wire` are (`flint.project/project-roots`,
+read directly by the JVM Clojure driver now rather than duplicated by it --
+migration step 1.2) -- not "a root when checks are on", full stop. What
+`:flint/check` in `features` still decides is which of TWO variants each of
+its public names resolves to, via an ordinary `#?(:flint/check A :default B)`
+ON EACH NAME inside the one file, `lib/flint/check.cljc` -- the exact
+mechanism every other `#?` in the stdlib already uses, deferred at read time
+and resolved per compile (`DECISIONS.md#namespaces-over-the-system-port`).
+Existing `#?(:flint/check ...)` conditionals elsewhere keep working
+unchanged -- they still select check-only code at THEIR call sites -- this
+only removes the requirement that a reference to `flint.check` itself be
+inside one.
+
+**Per name, by what it is and what the OFF build should cost:**
+
+* **`expect`** stays a MACRO in both variants (mirroring the ON variant's
+  kind was the maintainer's explicit correction over an earlier draft that
+  tried an ordinary function with `:inline` here): the OFF variant's
+  `expect` expands to a bare `nil`, so neither the predicate nor the argument
+  forms are ever analysed -- no call, no evaluation, no image bytes. This is
+  the one name that genuinely VANISHES, the same promise the whole namespace
+  used to keep only by not existing.
+* **`check`, `explain`** (the `Predicate` protocol's two methods in the ON
+  variant) are ordinary FUNCTIONS in the OFF variant too -- a protocol method
+  is an ordinary call from any caller's seat, so the OFF mirror keeps that
+  kind rather than becoming a macro -- and they THROW `"checks are not
+  enabled in this build"`. There is no sensible no-op: "does this predicate
+  pass" has no neutral answer once the checking facility itself is switched
+  off, unlike `expect`, which has an obvious vanish.
+* **`describe`, `failure-message`, `run-tests`** are ordinary functions in
+  both variants and THROW in the OFF one, for the same reason -- each only
+  means something while a check (or a test suite) is actually running.
+  `run-tests` specifically has no registry to run when checks are off: the
+  compiler generates `flint.check.registry` only `(contains? (:features @cc)
+  :flint/check)` (`src/flint/compiler.cljc`), unchanged by this revision.
+* **`test-var?`** is IDENTICAL in both variants -- not wrapped in `#?` at
+  all. It is a pure read of a var's own metadata, which the compiler indexes
+  unconditionally regardless of `:flint/check`, so there is nothing to
+  choose between.
+
+**`:inline` was considered and specifically ruled out for the no-op case.**
+An early instruction asked for the vanishing names to be ordinary functions
+carrying `:inline` metadata that expands the call to `nil` (`register-inline!`,
+`src/flint/compiler.cljc:253`, consumed by `inline-fn` in
+`src/flint/analyzer.cljc:353`) -- real, working machinery
+(`test/inline.clj`/`.cljc`/`.mjs` already exercise it end to end, including
+the "argument evaluated once, not zero, not twice" and "an inline call site
+takes the inline, not the function" cases this design would have needed to
+re-prove) -- but the maintainer's correction was that `expect` is SYNTACTIC
+or it is nothing: it needs the unevaluated argument FORMS (to locate the
+caret, to render `pred-src`/`arg-src`) in the variant that checks, so making
+its OFF twin an ordinary function would make the two variants different
+KINDS for the one name most likely to be called bare. A macro expanding to
+`nil` gets the same zero-cost result (`:inline`'s whole value proposition)
+for free, with no separate mechanism and no risk of the two kinds drifting.
+Nothing in `flint.check`'s current surface ends up needing `:inline` as a
+result -- `check`/`explain`/`describe`/`failure-message`/`run-tests` all
+throw instead of no-op, for the reasons above -- so this file does not newly
+exercise the mechanism; it is recorded here because the instruction asking
+for it was explicit and the reasoning for not using it should outlive the
+conversation that produced it.
+
+**Verified, not just reasoned about:**
+
+* `bin/check-flint-check-surface` (`bin/check_flint_check_surface.py`) parses
+  `lib/flint/check.cljc`'s `#?(:flint/check A :default B)` pairs and asserts
+  the same `(name, kind)` set on both sides; it is in `bin/check`'s
+  static-check loop. Adversarially probed before trusting it: changing the
+  OFF variant's `expect` from `defmacro` to `defn` makes it fail with exactly
+  that divergence named (`only in the ON variant: [('expect', 'macro')]`).
+* `sdks/esm/selftest.mjs` -- a bare `(flint.check/expect pred (side-effecting
+  call))` with NO `#?` wrapper and NO `:require [flint.check]`: compiles and
+  checks in a checks-ON build (the side effect runs once); compiles to a
+  no-op in a checks-OFF build (the side effect never runs, asserted by
+  reading back a counter the call would otherwise have bumped) -- the direct
+  test that the no-op's zero cost is real and not merely claimed.
+  `flint.check/run-tests` from a bare reference under checks off throws
+  `"checks are not enabled in this build"`. A hostile resolver offered
+  `flint.check` in both a checks-on and a checks-off compile is never asked
+  (recorded calls exclude it), the same "answered first, never offered"
+  guarantee `clojure.core` already had, now checked for `flint.check` too.
+* `bin/build-stdlib-forms`'s own stdcore probe (`[perf]`'s features, which
+  lack `:flint/check`) now reaches `flint.check` anyway and classifies it as
+  stdcore, MEASURED rather than special-cased -- `project-roots`'s
+  unconditional root addition is enough on its own, with no change to that
+  script needed. See `DECISIONS.md#namespaces-over-the-system-port` §4 for
+  why this means there is no third `dist/stdcheck.forms` blob.
+* Corpus images with checks off are unaffected: `flint.check`'s OFF-variant
+  vars are never called by anything the shaker can reach from a corpus
+  program's entry (none of the 23 top-level `corpus/*.cljc` programs
+  reference `flint.check` at all), so adding it as an always-resolved,
+  always-analysed root costs the SHAKER nothing to remove. MEASURED, not just
+  argued: every `corpus/*.cljc` program compiled `:optimize [perf]` through
+  this branch's native CLI and through a clean build of `origin/main`
+  (0f3ea76b) in a second worktree whose directory name is the same LENGTH
+  as this one's -- that control matters, because the first comparison (an
+  unmatched worktree name) showed every program differing by the SAME 56
+  bytes regardless of content, which was the embedded absolute source path
+  (`runtime/src/vm.rs`'s panic strings), not this change. With matched path
+  lengths: 21 of 21 compiling programs (caesar and dijkstra refused by both,
+  as the door-agreement comments already record) differ by exactly the SAME
+  88 bytes each, verified by `cmp -l` to be the 8 repeated occurrences of the
+  worktree directory's own name inside the embedded runtime panic strings
+  (`check-unit2` vs `baseline-01`, both 11 characters) -- a constant,
+  content-independent artefact of comparing two worktrees, not a function of
+  what either tree compiles. Zero bytes of difference are attributable to
+  the change itself.
+
 ### What was decided
 
 `(expect pred x)`-style argument checks are written as a **reader
@@ -15827,6 +15948,24 @@ carries `lib/deps.edn`'s workspace (`flint/flint`, its grants), exactly as a
 `stdlib()`/`stdextra()` answer does today, under rule 2 below. What changed
 is only which code path produces the answer, never the rule that governs
 what the answer means once it exists.
+
+**2026-10-07: stdcore grew a ninth member, `flint.check`, which is why "the
+required eight" below is now nine -- and why there is deliberately NO THIRD
+BLOB for it (`DECISIONS.md#checks`).** `flint.check` became an unconditional
+compiler root the same way `flint.port`/`flint.wire` already were, so the
+stdcore probe this script runs (`[perf]`'s features) reaches it regardless of
+`:flint/check`, and measurement alone -- no special case in
+`bin/build-stdlib-forms` -- puts it in `dist/stdcore.forms` beside the other
+eight. The earlier plan for this namespace (written into an earlier draft of
+the brief that produced this amendment) was a dedicated `dist/stdcheck.forms`,
+answered first like stdcore but separately, on the premise that `flint.check`
+would still be present-or-absent by feature the way the REST of this section
+is written against. That premise did not survive the maintainer's revision in
+`DECISIONS.md#checks`: once the namespace always exists and only its
+INTERNAL `#?(:flint/check A :default B)` branches vary by feature, it is not
+a third kind of thing, it is the ninth stdcore member -- and inventing a
+separate blob to hold the one answer stdcore already carries would itself be
+the second list `AGENTS.md §1` warns about.
 
 **How `lib/` is physically separated (design only -- no files moved by this
 survey).** The 36 namespaces already cluster into the required eight and 28

@@ -395,13 +395,14 @@ export function renderErrors(errors) {
   if (missing.length) {
     out.push(`no source for ${missing.map((e) => e[':ns']).join(' ')}\n` +
              'every namespace a program requires has to be on the source path');
-    // `flint.check` IS NOT MISSING BY ACCIDENT. Checks are on by default and
-    // their runtime is in stdextra, so a resolver without `stdextra()` cannot
-    // answer it -- and only this side knows why the compiler asked.
-    if (missing.some((e) => e[':ns'] === 'flint.check')) {
-      out.push('`flint.check` is asked for because checks are on (the default). It is in ' +
-               'stdextra(): compose that in, or compile with `checks: false`.');
-    }
+    // `flint.check` USED TO BE SPECIAL-CASED HERE (588f2980): it lived in
+    // stdextra, so a host without `stdextra()` saw it reported `:missing` for
+    // a reason this side alone understood. It is stdcore now, answered
+    // unconditionally before any resolver runs (`DECISIONS.md#checks`), so it
+    // can no longer appear in `missing` at all -- there is nothing left for
+    // this special case to explain, and removing it is how that is checked:
+    // if `flint.check` ever shows up here again, it is because the stdcore
+    // answer regressed, not because a host forgot `stdextra()`.
   }
   for (const x of refused) {
     out.push(`${x[':from']} requires ${x[':to']}, which ${x[':to-workspace']} guards with ` +
