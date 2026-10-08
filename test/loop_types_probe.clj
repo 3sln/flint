@@ -1,7 +1,8 @@
 ;; `bin/flint`, with the emitter counting what it specialises. Used by
-;; `test/loop_types.clj`; run on its own it takes `bin/flint`'s arguments:
+;; `test/loop_types.clj`; run on its own it takes `bin/flint`'s arguments, as
+;; its `FLINT_PRELOAD` (see that var's note in `bin/flint`):
 ;;
-;;   PROBE_OUT=counts.edn bb test/loop_types_probe.clj :src dir :fn ns/main :out x.wasm
+;;   PROBE_OUT=counts.edn FLINT_PRELOAD=test/loop_types_probe.clj ./bin/flint :src dir :fn ns/main :out x.wasm
 ;;
 ;; For every two-operand arithmetic or comparison builtin that HAS an integer
 ;; opcode, it records [enclosing-fn builtin outcome], where outcome is
@@ -9,12 +10,17 @@
 ;; of this -- a missed specialisation computes the same number -- so this is
 ;; the only way a test can see the inference.
 ;;
-;; The hook goes in BEFORE `bin/flint` is loaded, and `bin/flint`'s own require
-;; of an already-loaded namespace does not reload it, so the real driver runs
-;; with no copy of it here to drift.
-(require '[babashka.fs :as fs])
-(def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
-(babashka.classpath/add-classpath (str root "/src:" root "/lib"))
+;; THIS USED TO `load-file` `bin/flint` AFTER installing its hooks, relying on
+;; `bin/flint` being Clojure source babashka could run in the SAME process as
+;; this one. `bin/flint` is now a thin `sh` wrapper over a separate JVM
+;; (`clojure -M -m flint.driver.main`, migration step 1.2) -- `load-file`ing
+;; it is a read error on its first `#!`/`#` line, and babashka cannot run the
+;; driver JVM at all. `FLINT_PRELOAD` is `bin/flint`'s replacement extension
+;; point: `clojure -i`'s this file, in the driver's own JVM, before
+;; `flint.driver.main` is required -- so the hooks below are installed before
+;; the compile they watch ever runs, and `require`ing an already-loaded
+;; `flint.emitter` from inside the driver does not reload it and undo them
+;; (true of this file exactly as it was true of the old one).
 (require '[flint.emitter :as em])
 
 (def counts (atom {}))
@@ -36,8 +42,8 @@
                        (fnil inc 0))))
             (f ctx buf node tail?))))
 
-;; `bin/flint` ends in System/exit, so the counts leave by a shutdown hook.
+;; `flint.driver.main`'s compile path ends in `System/exit`, so the counts
+;; leave by a shutdown hook, exactly as they did for `bin/flint`'s own
+;; `System/exit` before this driver existed.
 (.addShutdownHook (Runtime/getRuntime)
                   (Thread. (fn [] (spit (System/getenv "PROBE_OUT") (pr-str @counts)))))
-
-(load-file (str root "/bin/flint"))

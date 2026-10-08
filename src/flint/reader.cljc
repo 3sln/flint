@@ -1087,8 +1087,12 @@
   branch, spliced, or dropped, exactly as `read-delimited` does when it
   chooses as it reads -- with its flat `poss` rebuilt to match. Answers
   `[items poss changed?]`; `poss` is nil when the input's was not one pair per
-  element (a `'x` carries a stale one), in which case it is left alone."
-  [items poss features file]
+  element (a `'x` carries a stale one), in which case it is left alone.
+
+  `sink`, threaded through every resolve-* fn to the one place that calls
+  `choose` (`resolve-node`'s `:else` branch): nil, or a volatile a matched-
+  nothing conditional is `conj`ed onto. See `resolve-conditionals`."
+  [items poss features file sink]
   (let [n (count items)
         paired? (= (count poss) (* 2 n))]
     (loop [i 0 acc [] ps [] changed? false]
@@ -1098,7 +1102,7 @@
               l (when paired? (nth poss (* 2 i)))
               c (when paired? (nth poss (inc (* 2 i))))]
           (if (conditional? x)
-            (let [r (resolve-node x features file)]
+            (let [r (resolve-node x features file sink)]
               (cond
                 (eof? r) (recur (inc i) acc ps true)
                 (identical? r SPLICE-NONE) (recur (inc i) acc ps true)
@@ -1106,7 +1110,7 @@
                                (recur (inc i) (into acc xs)
                                       (into ps (mapcat (fn [_] [l c]) xs)) true))
                 :else (recur (inc i) (conj acc r) (conj ps l c) true)))
-            (let [y (resolve-form x features file)]
+            (let [y (resolve-form x features file sink)]
               (recur (inc i) (conj acc y) (conj ps l c)
                      (or changed? (not (identical? x y)))))))))))
 
@@ -1114,47 +1118,54 @@
   "A conditional in a position that holds exactly ONE form -- a map value, a
   metadata value -- resolved, or refused as the odd count it would have read
   as."
-  [x features file]
+  [x features file sink]
   (if (conditional? x)
-    (let [r (resolve-node x features file)
+    (let [r (resolve-node x features file sink)
           [_ line col] (:form x)]
       (if (or (eof? r) (identical? r SPLICE-NONE) (spliced? r))
         (resolve-err file line col "map literal needs an even number of forms")
         r))
-    (resolve-form x features file)))
+    (resolve-form x features file sink)))
 
 (defn- resolve-meta
   "Metadata with any conditional in it resolved. Only an author's `^{..}` can
   hold one; the reader's own keys never do, and are skipped."
-  [m features file]
+  [m features file sink]
   (reduce (fn [acc e]
             (let [k (key e) v (val e)]
               (if (contains? bookkeeping-meta k)
                 acc
-                (let [v2 (resolve-one v features file)]
+                (let [v2 (resolve-one v features file sink)]
                   (if (identical? v v2) acc (assoc acc k v2))))))
           m m))
 
 (defn- resolve-node
   "One conditional node: `EOF` or `SPLICE-NONE` when it matched nothing, a
   `splice` when a `#?@` matched, and otherwise the form -- stamped as
-  `read-form*` stamps what a `#?` reads as."
-  [x features file]
+  `read-form*` stamps what a `#?` reads as.
+
+  Every conditional, top-level or nested, resolves through the `:else` branch
+  below -- `:map`/`:set` only recurse into one by way of `resolve-items` -- so
+  it is the one place `sink` is written to, mirroring `read-cond`'s `:elided`
+  for the live reader (same shape: `{:file :line :offered}`)."
+  [x features file sink]
   (let [[kind line col cpos items] (:form x)]
     (cond
       (= kind :map)
-      (let [[kvs] (resolve-items items nil features file)]
+      (let [[kvs] (resolve-items items nil features file sink)]
         (when (odd? (count kvs))
           (resolve-err file line col "map literal needs an even number of forms"))
         (stamp file line col (flint.rt/array-map kvs) nil))
 
       (= kind :set)
-      (let [[xs] (resolve-items items nil features file)]
+      (let [[xs] (resolve-items items nil features file sink)]
         (stamp file line col (set xs) nil))
 
       :else
-      (let [[clauses cps] (resolve-items items cpos features file)
+      (let [[clauses cps] (resolve-items items cpos features file sink)
             v (choose clauses features (= kind :splice))]
+        (when (and sink (or (eof? v) (identical? v SPLICE-NONE)))
+          (vswap! sink conj {:file file :line line :offered (vec (take-nth 2 clauses))}))
         (if (or (eof? v) (identical? v SPLICE-NONE) (spliced? v))
           v
           (stamp file line col v (when (seq? v) (or cps cpos))))))))
@@ -1162,13 +1173,13 @@
 (defn- resolve-form
   "`f` with every conditional inside it resolved; `f` itself, metadata and
   all, when it holds none."
-  [f features file]
+  [f features file sink]
   (let [m (meta f)
-        m2 (if m (resolve-meta m features file) m)
+        m2 (if m (resolve-meta m features file sink) m)
         rebuilt
         (cond
           (or (seq? f) (vector? f))
-          (let [[xs ps changed?] (resolve-items (vec f) (:child-pos m) features file)]
+          (let [[xs ps changed?] (resolve-items (vec f) (:child-pos m) features file sink)]
             (when changed?
               [(if (seq? f) (apply list xs) xs)
                ;; THE POSITIONS FOLLOW THE ELEMENTS, and an empty list has
@@ -1186,15 +1197,15 @@
                         (when changed? acc)
                         (let [x (nth kvs i)
                               y (if (even? i)
-                                  (resolve-form x features file)
-                                  (resolve-one x features file))]
+                                  (resolve-form x features file sink)
+                                  (resolve-one x features file sink))]
                           (recur (inc i) (conj acc y)
                                  (or changed? (not (identical? x y)))))))]
             (when out [(flint.rt/array-map out) m2]))
 
           (set? f)
           (let [xs (vec f)
-                ys (mapv (fn [x] (resolve-form x features file)) xs)]
+                ys (mapv (fn [x] (resolve-form x features file sink)) xs)]
             (when (some true? (map (fn [x y] (not (identical? x y))) xs ys))
               [(set ys) m2]))
 
@@ -1208,23 +1219,31 @@
   "The forms of a `read-deferred` answer under `features`: what `read-all`
   with those features would have read from the same text, metadata included.
   Only the top-level forms `:conds` names are walked. `file` is the read's
-  `:file`, which positions are stamped with."
-  [{:keys [forms conds]} features file]
-  (if (empty? conds)
-    forms
-    (let [at (set conds)
-          n (count forms)]
-      (loop [i 0 acc []]
-        (if (= i n)
-          acc
-          (let [f (nth forms i)]
-            (if (contains? at i)
-              (if (conditional? f)
-                (let [r (resolve-node f features file)
-                      [_ line col] (:form f)]
-                  (cond
-                    (or (eof? r) (identical? r SPLICE-NONE)) (recur (inc i) acc)
-                    (spliced? r) (resolve-err file line col "#?@ outside a collection")
-                    :else (recur (inc i) (conj acc r))))
-                (recur (inc i) (conj acc (resolve-form f features file))))
-              (recur (inc i) (conj acc f)))))))))
+  `:file`, which positions are stamped with.
+
+  `sink`, optional: a volatile every matched-nothing conditional is `conj`ed
+  onto, as `{:file :line :offered}` -- the same shape `read-cond` builds for
+  the live reader's `:elided`, so a caller can report elisions from a
+  deferred read the same way `elided` reports them from a live one. Omitted
+  (the 3-arg arity), nothing is recorded -- the behaviour every existing
+  caller already gets."
+  ([d features file] (resolve-conditionals d features file nil))
+  ([{:keys [forms conds]} features file sink]
+   (if (empty? conds)
+     forms
+     (let [at (set conds)
+           n (count forms)]
+       (loop [i 0 acc []]
+         (if (= i n)
+           acc
+           (let [f (nth forms i)]
+             (if (contains? at i)
+               (if (conditional? f)
+                 (let [r (resolve-node f features file sink)
+                       [_ line col] (:form f)]
+                   (cond
+                     (or (eof? r) (identical? r SPLICE-NONE)) (recur (inc i) acc)
+                     (spliced? r) (resolve-err file line col "#?@ outside a collection")
+                     :else (recur (inc i) (conj acc r))))
+                 (recur (inc i) (conj acc (resolve-form f features file sink))))
+               (recur (inc i) (conj acc f))))))))))

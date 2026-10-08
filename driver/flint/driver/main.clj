@@ -312,17 +312,23 @@
 (def elisions
   "Reader conditionals that matched no feature, gathered across every source.
 
-  DEAD since this driver stopped reading with `flint.reader` directly: nothing
-  pushes into this any more (`flint.reader/elided` was a property of a LIVE
-  reader state `collect` held, and the kin reader's deferred forms carry no
-  such log back through `flint.project/read-entry`). The note this fed --
-  \"N reader conditional(s) ... matched none of ... -- the form each stood in
-  was DELETED\" -- no longer prints. No suite here checks for it
-  (`grep`ped `test/cli.clj`, `test/door-agreement.clj`,
-  `test/selfhost*.clj` for the message first), so this is a known, recorded
-  regression rather than a silent one; reviving it means teaching
-  `flint.forms`'s decode to report which encoded `:conds` a given feature set
-  elided, which `resolve-conditionals` does not do today."
+  Was DEAD from the move off babashka until this fix: `flint.reader/elided`
+  was a property of the LIVE reader state `collect` held, and the kin
+  reader's deferred forms carried no such log back through
+  `flint.project/read-entry` -- nothing pushed into this volatile, so the
+  note it fed (\"N reader conditional(s) ... matched none of ... -- the form
+  each stood in was DELETED\") never printed, and no suite caught it: a
+  `grep` for the message over `test/cli.clj`, `test/door-agreement.clj` and
+  `test/selfhost*.clj`, done when this regression was first recorded, missed
+  `test/options.clj`'s own check for it (AGENTS.md sec. 1 -- the grep that
+  justified leaving this dead did not cover every list).
+
+  Revived by threading an optional `sink` through
+  `flint.reader/resolve-conditionals` (and `flint.project/read-entry` and
+  `fn-resolver` above it) down to the one place that calls `choose` on a
+  deferred conditional -- so a DEFERRED read now records an elision the same
+  way the live reader's `read-cond` always did, as `{:file :line :offered}`,
+  and `resolve-sources!` passes this volatile as that sink."
   (volatile! []))
 
 (defn ns-of
@@ -411,9 +417,13 @@
   (`flint.project/finish-project`); any resolution error -- missing, refused, a
   bad answer shape -- is reported all at once and exits 1, the way `collect`
   reported a missing namespace and `refuse-guarded-requires!` reported a guard
-  in one shot each, now unified into one report."
+  in one shot each, now unified into one report.
+
+  `elisions` rides along as `fn-resolver`'s sink, so a matched-nothing
+  conditional in ANY file this walk reads lands in the one list `compile`
+  below reports from -- see `elisions`'s docstring."
   [dirs entry-ns features roots*]
-  (let [resolver (project/fn-resolver (clojure.core/fn [n] (resolve-ns dirs n)) features)
+  (let [resolver (project/fn-resolver (clojure.core/fn [n] (resolve-ns dirs n)) features elisions)
         r (project/resolve-project-waves resolver entry-ns features roots*)]
     (when (seq (:errors r))
       (binding [*out* *err*]
