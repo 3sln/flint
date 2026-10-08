@@ -50,6 +50,14 @@
 ;; not do -- still works for exploration.
 (def root (or (System/getenv "FLINT_ROOT") (.getCanonicalPath (io/file "."))))
 
+(def shipped-roots
+  "The source roots of the guest code flint ships, in search order: the
+  standard library's two layers, then `flint.deps` and `flint.cli`, each its own
+  workspace (`DECISIONS.md#four-units`). The native CLI embeds the same four
+  (`cli/build.rs`), and `bin/build-stdlib-forms` reads them for the JavaScript
+  doors."
+  (mapv (clojure.core/fn [d] (str root "/" d)) ["lib/stdcore" "lib/stdextra" "lib/deps" "cli/lib"]))
+
 (defn clr-name
   "An assembly name from the output path -- READ from `flint.compiler.clr/assembly-name`
   rather than restated here.
@@ -238,24 +246,20 @@
   owns its root, and reader tags are bound per PROJECT (`DECISIONS.md#reader-tags`),
   so this is what a tag lookup keys on.
 
-  `flint.deps`'s own workspace carve-out
-  (`DECISIONS.md#flint-deps-is-its-own-workspace`) lives here rather than
-  changing what gets searched: every OTHER door (the native CLI,
-  `sdks/esm/src/flint.js`) assigns a workspace by NAMESPACE PREFIX
-  (\"flint/deps\", no trailing slash, so it matches `flint.deps` itself --
-  `lib/flint/deps.cljc`, a file beside `lib/flint/deps/`, not inside it --
-  as well as `flint.deps.manifest` and its siblings), but this fn works from
-  the matched ROOT outward, so the same carve-out is a path check on `f`
-  rather than a namespace check. A file under it gets a root one level
-  deeper than its directory, so `project-of` reads
-  `lib/flint/deps/deps.edn` instead of `lib/deps.edn`."
+  THE LONGEST MATCHING DIR, not the first: roots may nest -- `lib/deps/` sits
+  inside `lib/` -- and a file belongs to the innermost root that holds it.
+  `flint.deps` used to need a carve-out here, a path check that pushed its four
+  files one directory deeper than `lib/` so `project-of` read their own
+  `deps.edn` (`DECISIONS.md#flint-deps-is-its-own-workspace`); it is a root of
+  its own now, `lib/deps/` (`DECISIONS.md#four-units`), and the carve-out is
+  gone."
   [dirs f]
-  (let [d (first (filter (clojure.core/fn [d] (str/starts-with? (str f) (str d))) dirs))]
-    (if (and d (str/ends-with? (str d) "/lib")
-             (or (str/includes? (str f) "/lib/flint/deps.cljc")
-                 (str/includes? (str f) "/lib/flint/deps/")))
-      (str d "/flint/deps")
-      d)))
+  (let [under? (clojure.core/fn [d]
+                 ;; A `:src` may be the FILE itself (a script), and a dir may be
+                 ;; spelled with a trailing slash.
+                 (let [d (str/replace (str d) #"/+$" "")]
+                   (or (= (str f) d) (str/starts-with? (str f) (str d "/")))))]
+    (last (sort-by (comp count str) (filter under? dirs)))))
 
 (defn find-source
   "First hit wins. The path is `:src` dirs, then `:wasm-path` dirs, then flint's
@@ -496,7 +500,7 @@
 ;; automatically, and no name is recorded for a runner to find
 ;; (`DECISIONS.md#structured-ports` step 5). The image path is
 ;; what construe's sandbox binding settled on and needs no linker anywhere
-;; (DECISIONS.md#cli, 0023); it is here rather than in `lib/flint/cli.cljc`
+;; (DECISIONS.md#cli, 0023); it is here rather than in `cli/lib/flint/cli.cljc`
 ;; because running an image means instantiating a SECOND module, which is the
 ;; host's job and not the guest's.
 (when (= "run" (first *command-line-args*))
@@ -635,7 +639,7 @@
             (System/exit 0))))))
 
 ;; The project commands -- `tasks`, `task`, `deps`, `paths`, `targets`,
-;; `version`, `help`. The LOGIC for all of them is `lib/flint/cli.cljc`, a flint
+;; `version`, `help`. The LOGIC for all of them is `cli/lib/flint/cli.cljc`, a flint
 ;; program, because 0021's argument is that this surface has to survive losing
 ;; babashka. What is here is the host half: read a file, and run what the guest
 ;; says to run.
@@ -814,7 +818,7 @@
                      (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
                      (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
                      (.waitFor p)))
-            ;; THE TARGET HAS TO TRAVEL. `lib/flint/cli.cljc` put `:target` in
+            ;; THE TARGET HAS TO TRAVEL. `cli/lib/flint/cli.cljc` put `:target` in
             ;; the build request and this re-entry dropped it, so
             ;; `flint build :target clr` emitted a wasm module while the CLI that
             ;; asked believed otherwise -- invisible for as long as `clr` was
@@ -836,7 +840,7 @@
     (if-let [x (:exec r)]
       ;; A task is a program: write it, compile it, run it. Two processes rather
       ;; than one because `flint_load_image` clears the caller's frames -- a
-      ;; guest cannot run a task from inside itself (see `lib/flint/cli.cljc`).
+      ;; guest cannot run a task from inside itself (see `cli/lib/flint/cli.cljc`).
       (let [dir (str (fs/create-temp-dir))
             wasm (str dir "/task.wasm")]
         (fs/create-dirs (str dir "/flint"))
@@ -935,8 +939,11 @@
         unit-path (concat (or wasm-path []) [(str root "/units")])
         ;; Source resolution: your :src first, then source shipped beside a unit
         ;; (a unit is a namespace's native half; the .cljc beside it is its
-        ;; Clojure half), then flint's own lib. Stated in the README.
-        dirs (concat (or src []) unit-path [(str root "/lib")])
+        ;; Clojure half), then the guest source flint ships -- the standard
+        ;; library's two roots, `flint.deps`'s and `flint.cli`'s, the four
+        ;; units the two CLIs embed (`DECISIONS.md#four-units`). Stated in the
+        ;; README.
+        dirs (concat (or src []) unit-path shipped-roots)
         entry-ns (if test-mode? 'clojure.core (symbol (namespace fn)))
         ;; `:optimize [perf]` REMOVES `:flint/check`.
         ;;
@@ -1030,7 +1037,8 @@
         ;; The note exists to say "a form you wrote silently vanished". A form
         ;; flint wrote, vanishing exactly as flint intended, is not that.
         _ (let [mine? (clojure.core/fn [f]
-                        (not (or (str/starts-with? (str f) (str root "/lib"))
+                        (not (or (some (clojure.core/fn [d] (str/starts-with? (str f) (str d "/")))
+                                       shipped-roots)
                                  (str/starts-with? (str f) (str root "/units")))))
                 by-file (group-by :file (filter (comp mine? :file) @elisions))]
             (when (seq by-file)

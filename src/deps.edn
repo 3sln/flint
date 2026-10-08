@@ -1,0 +1,10 @@
+;; The compiler's own workspace (`DECISIONS.md#four-units`).
+;;
+;; NAMED, AND GRANTED NOTHING. The compiler reaches its host only through the
+;; resolver PORT a compile is handed as an argument
+;; (`DECISIONS.md#namespaces-over-the-system-port`, "the port is the
+;; capability"), so it needs no `:host`. The name is what makes `^:internal`
+;; mean something here: `flint.compiler.*` internals are visible to this
+;; workspace and refused to every guest outside it
+;; (`DECISIONS.md#namespace-is-workspace-local`).
+{:flint/workspace flint/compiler}

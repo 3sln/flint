@@ -2,7 +2,7 @@
 """`flint.check`'s ON and OFF variants publish the same names, the same kind.
 
 `DECISIONS.md#checks`: since the maintainer's 2026-10-07 revision,
-`lib/flint/check.cljc` is one file whose public names each pick their ON or
+`lib/stdcore/flint/check.fln` is one file whose public names each pick their ON or
 OFF body via `#?(:flint/check A :default B)`, resolved per compile rather
 than by the namespace existing or not. "Same public surface" is a claim a
 script can check and a sentence cannot: this walks every top-level
@@ -24,7 +24,10 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "lib", "flint", "check.cljc")
+# `lib/stdcore/flint/check.fln` moved to `lib/stdcore/flint/check.fln` -- same
+# namespace, now in the stdlib's `.fln`-only root (AGENTS.md's restructure
+# note).
+SRC = os.path.join(ROOT, "lib", "stdcore", "flint", "check.fln")
 
 DEF_RE = re.compile(r"\(\s*(defn-?|defmacro)\s+\^?\{?\s*\(?\s*([A-Za-z0-9!?*<>=_+./-]+)")
 # A `defprotocol` method signature: `(name [args ..] "doc"?)` directly inside

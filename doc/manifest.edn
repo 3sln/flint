@@ -3,7 +3,7 @@
 ;; separately asserts that every var listed under :present really is
 ;; callable from a compiled module.
 {clojure.core
- {:file "lib/clojure/core.cljc",
+ {:file "lib/stdcore/clojure/core.fln",
   :present
   #{*
     +
@@ -737,23 +737,23 @@
   :extra #{},
   :compared-with clojure.core},
  clojure.core.protocols
- {:file "lib/clojure/core/protocols.cljc",
+ {:file "lib/stdextra/clojure/core/protocols.fln",
   :present #{Datafiable Navigable datafy nav},
   :macros #{},
   :count 4},
  clojure.data
- {:file "lib/clojure/data.cljc",
+ {:file "lib/stdextra/clojure/data.fln",
   :present
   #{Diff EqualityPartition diff diff-similar equality-partition},
   :macros #{},
   :count 5},
  clojure.datafy
- {:file "lib/clojure/datafy.cljc",
+ {:file "lib/stdextra/clojure/datafy.fln",
   :present #{datafy nav},
   :macros #{},
   :count 2},
  clojure.edn
- {:file "lib/clojure/edn.cljc",
+ {:file "lib/stdextra/clojure/edn.fln",
   :present #{read-all read-string},
   :macros #{},
   :count 2,
@@ -761,7 +761,7 @@
   :extra #{read-all},
   :compared-with clojure.edn},
  clojure.math
- {:file "lib/clojure/math.cljc",
+ {:file "lib/stdextra/clojure/math.fln",
   :present
   #{E
     PI
@@ -815,7 +815,7 @@
   :extra #{abs},
   :compared-with clojure.math},
  clojure.set
- {:file "lib/clojure/set.cljc",
+ {:file "lib/stdextra/clojure/set.fln",
   :present
   #{difference
     index
@@ -835,7 +835,7 @@
   :extra #{},
   :compared-with clojure.set},
  clojure.string
- {:file "lib/clojure/string.cljc",
+ {:file "lib/stdcore/clojure/string.fln",
   :present
   #{blank?
     capitalize
@@ -866,7 +866,7 @@
   :extra #{register-regex-ops! split-literal},
   :compared-with clojure.string},
  clojure.walk
- {:file "lib/clojure/walk.cljc",
+ {:file "lib/stdextra/clojure/walk.fln",
   :present
   #{keywordize-keys
     postwalk
@@ -881,7 +881,7 @@
   :extra #{},
   :compared-with clojure.walk},
  clojure.zip
- {:file "lib/clojure/zip.cljc",
+ {:file "lib/stdextra/clojure/zip.fln",
   :present
   #{append-child
     branch?
@@ -917,7 +917,7 @@
   :extra #{},
   :compared-with clojure.zip},
  flint.core
- {:file "lib/flint/core.cljc",
+ {:file "lib/stdcore/flint/core.fln",
   :present
   #{->str-builder
     bigdec?
@@ -936,7 +936,7 @@
   :macros #{},
   :count 14},
  flint.data.html
- {:file "lib/flint/data/html.cljc",
+ {:file "lib/stdextra/flint/data/html.fln",
   :present
   #{all-elements
     attr
@@ -953,17 +953,17 @@
   :macros #{},
   :count 12},
  flint.data.json
- {:file "lib/flint/data/json.cljc",
+ {:file "lib/stdextra/flint/data/json.fln",
   :present #{omit read-str write-str},
   :macros #{},
   :count 3},
  flint.data.transit
- {:file "lib/flint/data/transit.cljc",
+ {:file "lib/stdextra/flint/data/transit.fln",
   :present #{decode encode},
   :macros #{},
   :count 2},
  flint.data.xml
- {:file "lib/flint/data/xml.cljc",
+ {:file "lib/stdextra/flint/data/xml.fln",
   :present
   #{attr
     element
@@ -977,7 +977,7 @@
   :macros #{},
   :count 9},
  flint.doc
- {:file "lib/flint/doc.cljc",
+ {:file "lib/stdextra/flint/doc.fln",
   :present
   #{children
     close
@@ -993,7 +993,7 @@
   :macros #{},
   :count 11},
  flint.port
- {:file "lib/flint/port.cljc",
+ {:file "lib/stdcore/flint/port.fln",
   :present
   #{bridge?
     channel
@@ -1011,7 +1011,7 @@
   :macros #{with-open},
   :count 13},
  flint.protocols
- {:file "lib/flint/protocols.cljc",
+ {:file "lib/stdcore/flint/protocols.fln",
   :present
   #{-meta
     -wire-meta
@@ -1029,7 +1029,7 @@
   :macros #{},
   :count 13},
  flint.protocols.io
- {:file "lib/flint/protocols/io.cljc",
+ {:file "lib/stdextra/flint/protocols/io.fln",
   :present
   #{BinarySink
     BinarySource
@@ -1051,7 +1051,7 @@
   :macros #{},
   :count 17},
  flint.regex
- {:file "lib/flint/regex.cljc",
+ {:file "lib/stdcore/flint/regex.fln",
   :present
   #{find-from
     find-from-old
@@ -1067,12 +1067,12 @@
   :macros #{},
   :count 11},
  flint.rpc
- {:file "lib/flint/rpc.cljc",
+ {:file "lib/stdextra/flint/rpc.fln",
   :present #{call call-each call-seq cancel client close},
   :macros #{},
   :count 6},
  flint.thread
- {:file "lib/flint/thread.cljc",
+ {:file "lib/stdextra/flint/thread.fln",
   :present #{join result self spawn state thread-id thread? yield},
   :macros #{},
   :count 8}}

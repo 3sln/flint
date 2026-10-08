@@ -3,7 +3,7 @@
 //
 // The CLI is a host like any other and composes the SDK's building blocks:
 //
-//     chain(stdextra, the host catalogue's virtual namespaces, roots..)
+//     chain(stdextra, deps, cli, the host catalogue's virtual namespaces, roots..)
 //
 // stdcore is not in it: `compileCall` answers those names from the embedded copy
 // before this resolver is asked anything. STRICT PRIORITY, not segregation: a
@@ -126,13 +126,13 @@ function catalogue(nested) {
 }
 
 /// The CLI's resolver for `srcs` -- source roots -- or for `sources`, a
-/// `[[ns, text], ..]` list (`flint.ception`'s `:sources`), given the stdextra
-/// blob. Both get the library and the catalogue: a nested program asking for
+/// `[[ns, text], ..]` list (`flint.ception`'s `:sources`), given the stdextra,
+/// deps and cli blobs. Both get the library and the catalogue: a nested program asking for
 /// `flint.sys.env` is served it exactly as a top-level one is.
 ///
 /// `sources` text is PORTABLE source by that surface's contract, so its
 /// dialect is said rather than guessed from a made-up file name.
-export function projectResolver({ srcs = null, sources = null, stdextra, nested = true }) {
+export function projectResolver({ srcs = null, sources = null, stdextra, deps, cli, nested = true }) {
   let mine;
   if (sources) {
     const byNs = new Map(sources);
@@ -140,7 +140,9 @@ export function projectResolver({ srcs = null, sources = null, stdextra, nested 
   } else {
     mine = srcs.map(root);
   }
-  return chain(layer(stdextra), catalogue(nested), ...mine);
+  // `flint.deps` and `flint.cli` after the standard library, each answering with
+  // its own unit's workspace (`DECISIONS.md#four-units`).
+  return chain(layer(stdextra), layer(deps), layer(cli), catalogue(nested), ...mine);
 }
 
 /// Every namespace declared under `srcs`, for `test`: a test that nothing

@@ -11,29 +11,34 @@
 (require '[flint.compiler.reader :as reader] '[flint.compiler.core :as compiler] '[flint.compiler.macros :as macros])
 
 (def shipped
-  "Namespace -> source file. These are what a flint program can require."
-  '{clojure.core      "lib/clojure/core.cljc"
-    clojure.string    "lib/clojure/string.cljc"
-    clojure.core.protocols "lib/clojure/core/protocols.cljc"
-    clojure.datafy    "lib/clojure/datafy.cljc"
-    clojure.data      "lib/clojure/data.cljc"
-    clojure.set       "lib/clojure/set.cljc"
-    clojure.math      "lib/clojure/math.cljc"
-    clojure.walk      "lib/clojure/walk.cljc"
-    clojure.zip       "lib/clojure/zip.cljc"
-    clojure.edn       "lib/clojure/edn.cljc"
-    flint.core        "lib/flint/core.cljc"
-    flint.protocols   "lib/flint/protocols.cljc"
-    flint.regex       "lib/flint/regex.cljc"
-    flint.thread      "lib/flint/thread.cljc"
-    flint.port        "lib/flint/port.cljc"
-    flint.protocols.io "lib/flint/protocols/io.cljc"
-    flint.rpc         "lib/flint/rpc.cljc"
-    flint.doc         "lib/flint/doc.cljc"
-    flint.data.json   "lib/flint/data/json.cljc"
-    flint.data.transit "lib/flint/data/transit.cljc"
-    flint.data.xml    "lib/flint/data/xml.cljc"
-    flint.data.html   "lib/flint/data/html.cljc"})
+  "Namespace -> source file. These are what a flint program can require.
+
+  The standard library is now two source roots (AGENTS.md's restructure
+  note): `lib/stdcore/` and `lib/stdextra/`, both `.fln`, both owned by
+  `lib/deps.edn`. Which of the two a namespace landed in is not meaningful
+  here -- this map just has to point at the right file."
+  '{clojure.core      "lib/stdcore/clojure/core.fln"
+    clojure.string    "lib/stdcore/clojure/string.fln"
+    clojure.core.protocols "lib/stdextra/clojure/core/protocols.fln"
+    clojure.datafy    "lib/stdextra/clojure/datafy.fln"
+    clojure.data      "lib/stdextra/clojure/data.fln"
+    clojure.set       "lib/stdextra/clojure/set.fln"
+    clojure.math      "lib/stdextra/clojure/math.fln"
+    clojure.walk      "lib/stdextra/clojure/walk.fln"
+    clojure.zip       "lib/stdextra/clojure/zip.fln"
+    clojure.edn       "lib/stdextra/clojure/edn.fln"
+    flint.core        "lib/stdcore/flint/core.fln"
+    flint.protocols   "lib/stdcore/flint/protocols.fln"
+    flint.regex       "lib/stdcore/flint/regex.fln"
+    flint.thread      "lib/stdextra/flint/thread.fln"
+    flint.port        "lib/stdcore/flint/port.fln"
+    flint.protocols.io "lib/stdextra/flint/protocols/io.fln"
+    flint.rpc         "lib/stdextra/flint/rpc.fln"
+    flint.doc         "lib/stdextra/flint/doc.fln"
+    flint.data.json   "lib/stdextra/flint/data/json.fln"
+    flint.data.transit "lib/stdextra/flint/data/transit.fln"
+    flint.data.xml    "lib/stdextra/flint/data/xml.fln"
+    flint.data.html   "lib/stdextra/flint/data/html.fln"})
 
 (def compared-with
   "Which real Clojure namespace to diff against, where there is one."

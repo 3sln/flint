@@ -22,7 +22,9 @@
   (some (fn [d] (some (fn [ext]
                         (let [f (io/file d (str (ns->path n) ext))]
                           (when (.exists f) {:src (slurp f) :file (str f)})))
-                      [".cljc" ".clj"]))
+                      ;; Most specific first (`DECISIONS.md#dialects-and-preludes`):
+                      ;; a namespace may have both a `.fln` and a `.cljc`.
+                      [".fln" ".cljc" ".clj"]))
         dirs))
 
 (defn collect [dirs roots]
@@ -57,7 +59,9 @@
                   k (keys (:provides u))]
               k)))
 
-(def dirs ["src" "lib"])
+;; The four shipped roots (AGENTS.md's restructure note), plus `src` for the
+;; compiler's own namespaces -- `lib` used to be the one stdlib root.
+(def dirs ["src" "lib/stdcore" "lib/stdextra" "lib/deps" "cli/lib"])
 (def entry 'flint.compiler.selfhost/main)
 ;; `flint.system` WAS A ROOT here, the fourth place that had to say so, because
 ;; bootstrap spawned it by NAME. The control plane is the runtime's now and the

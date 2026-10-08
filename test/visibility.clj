@@ -16,7 +16,10 @@
 ;; The positive cases matter as much as the refusals. A check that refuses
 ;; everything passes its own test and breaks the build, so each refusal here
 ;; is paired with the reference that must still be allowed.
-(babashka.classpath/add-classpath "src:lib")
+;; Only `src` is needed: the compiler's own sources. `lib` now holds `.fln`
+;; stdlib files the JVM/bb classloader cannot load, and the `files` maps below
+;; are hand-written stand-ins rather than the real stdlib anyway.
+(babashka.classpath/add-classpath "src")
 (require '[flint.compiler.resolve :as project] '[flint.compiler.core :as compiler]
          '[clojure.string :as str])
 

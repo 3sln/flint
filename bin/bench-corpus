@@ -87,7 +87,7 @@
              "" "(DIRTY: uncommitted changes under src lib corpus cli runtime)")
            "on" (sh-out "date" "+%F"))
   (println "clojure:" (sh-out "clojure" "--version") "| bb:" (sh-out "bb" "--version")
-           "| node:" (sh-out "node" "--version") "| flint:" (sh-out "git" "log" "-1" "--format=%h" "--" "src" "lib"))
+           "| node:" (sh-out "node" "--version") "| flint:" (sh-out "git" "log" "-1" "--format=%h" "--" "src" "lib" "cli/lib"))
   (println "load:   " (sh-out "sysctl" "-n" "vm.loadavg"))
   (println (str "method:  steady state = best of " reps " warm in-process calls of main, after 300 ms"))
   (println "         and >= 3 untimed calls; end to end = best of 3 whole processes.")

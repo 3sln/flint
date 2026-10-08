@@ -114,6 +114,7 @@ this block.
 - [gate-timings](#gate-timings) -- Gate wall-clock figures, re-derived after `bin/check` and `bin/test` grew, and two earlier figures corrected.
 - [rebuild-order-pitfalls](#rebuild-order-pitfalls) -- Two incidents where a stale build artefact read exactly like a real divergence between doors.
 - [reproducible-build-paths](#reproducible-build-paths) -- `:to :clr` was not in the original byte-identity proof above, and the entry that used to stand here was wrong.
+- [four-units](#four-units) -- The guest source flint ships is four units, each its own workspace in its own source root
 <!-- TOC:END -->
 
 ---
@@ -1468,7 +1469,7 @@ raised instead, from 500 000 to 545 000, measured and recorded in
 **Status: roadmap, not next — verified 2026-09-12 as still unbuilt.** Nothing
 here exists: no named-block API, no per-thread block stack, no `flint.prof`
 namespace anywhere in `lib/`, `src/`, the runtime or the ports. The four
-tree-wide matches for "profil" are Maven profiles in `lib/flint/deps.cljc`
+tree-wide matches for "profil" are Maven profiles in `lib/deps/flint/deps.cljc`
 and a storage-profile comment in `host/docstore.mjs` — checked, because a
 grep for this word is nearly all false positives. The diagnostics build's
 `runtime/src/aotstat.rs` counters are an opcode census and the region
@@ -1616,7 +1617,7 @@ builtins)` for `(defn main [_] "hi")`, `(+39)` for the same program calling
 `flint.data.json/write-str`, `(+192)` for the loader build. The parsers are
 adapted crates, not hand-written — `units-src/flint-data-json` over
 `serde_json`, `…-xml` over `xmlparser`, `…-html` over `htmlparser`, reached
-from cljc through `flint.rt/json-parse` (`lib/flint/data/json.cljc:39`).
+from cljc through `flint.rt/json-parse` (`lib/stdextra/flint/data/json.fln:39`).
 
 ### What was decided, and what replaced it
 
@@ -1660,7 +1661,7 @@ inside an ordinary compile.** Checked 2026-09-12. `src/flint/compiler/link.cljc`
 -flavor wasm --no-entry --gc-sections` over only the reachable units' `.o`
 files; `units/` holds one unit per namespace (`flint.rt`, `flint.conc`,
 `flint.data.{json,html,xml}`), built by `bin/build-units`. No `link` subcommand
-exists in `cli/src/main.rs`, `bin/flint` or `lib/flint/cli.cljc`. Observed:
+exists in `cli/src/main.rs`, `bin/flint` or `cli/lib/flint/cli.cljc`. Observed:
 `./bin/flint :src … :fn m/main` on `(defn main [_] "hi")`, then `./bin/flint
 inspect` on the result, prints `units: flint.rt` / `(+23 builtins)`, against
 `(+192 builtins)` for the loader build of the same program — only the reached
@@ -2152,7 +2153,7 @@ plausible-looking cause, closed by the copy-small-slices rule above.
 
 The instinct to abandon regex for PEG is diagnosed as right in spirit and
 wrong in the specifics. flint's regex feature set is already the safe
-subset — `lib/flint/regex.cljc` refuses lookahead, lookbehind,
+subset — `lib/stdcore/flint/regex.fln` refuses lookahead, lookbehind,
 backreferences, and named groups, which is roughly RE2's subset and is
 exactly the subset matchable without backtracking at all. **The actual
 hazard is that the implementation is a backtracker regardless of the
@@ -2200,9 +2201,9 @@ reference and a native one — over a rope cursor. `re-pattern`, `re-find`,
 `re-matches`, `re-seq` all run on it; the catastrophic-backtracking case
 stays linear (measured: `(a+)+$` over 24 and 48 characters, 37 ms and 38 ms
 — i.e., not exponential). Verified 2026-09-12. All three parts exist:
-`lib/flint/nfa.cljc` (the shared compiler), `lib/flint/pike.cljc` (the cljc
+`lib/stdcore/flint/nfa.fln` (the shared compiler), `lib/stdextra/flint/pike.fln` (the cljc
 reference), and the native simulators — `runtime/src/pike.rs` plus the
-generated `Pike.java`/`Pike.cs` — which `lib/flint/regex.cljc` reaches through
+generated `Pike.java`/`Pike.cs` — which `lib/stdcore/flint/regex.fln` reaches through
 the `flint.rt/re-compile` and `flint.rt/re-run` builtins (l.295, 322, 333, 391),
 not through the cljc one. Observed through `target/release/flint run`:
 `re-find` with capture groups, `re-matches` matching and returning nil,
@@ -2319,7 +2320,7 @@ of memory.
 the transient, the column API, the codec/reader tag and the JVM/CLR ports as
 not built. All four are in the tree, and the body of this section already
 describes three of them as done — the banner was stale, not the content.
-Checked 2026-09-12, by reading and by running. In `lib/flint/table.cljc`:
+Checked 2026-09-12, by reading and by running. In `lib/stdextra/flint/table.fln`:
 `build` is `transient`/`conj!`/`persistent!` (l.157), `column`,
 `reduce-column`, `slice` and `select` are the column API (l.174–213), and
 `read-table` (l.218) is bound to `#flint/table` in `src/flint/compiler/reader.cljc:526`.
@@ -2713,7 +2714,7 @@ read directly by the JVM Clojure driver now rather than duplicated by it --
 migration step 1.2) -- not "a root when checks are on", full stop. What
 `:flint/check` in `features` still decides is which of TWO variants each of
 its public names resolves to, via an ordinary `#?(:flint/check A :default B)`
-ON EACH NAME inside the one file, `lib/flint/check.cljc` -- the exact
+ON EACH NAME inside the one file, `lib/stdcore/flint/check.fln` -- the exact
 mechanism every other `#?` in the stdlib already uses, deferred at read time
 and resolved per compile (`DECISIONS.md#namespaces-over-the-system-port`).
 Existing `#?(:flint/check ...)` conditionals elsewhere keep working
@@ -2773,7 +2774,7 @@ conversation that produced it.
 **Verified, not just reasoned about:**
 
 * `bin/check-flint-check-surface` (`bin/check_flint_check_surface.py`) parses
-  `lib/flint/check.cljc`'s `#?(:flint/check A :default B)` pairs and asserts
+  `lib/stdcore/flint/check.fln`'s `#?(:flint/check A :default B)` pairs and asserts
   the same `(name, kind)` set on both sides; it is in `bin/check`'s
   static-check loop. Adversarially probed before trusting it: changing the
   OFF variant's `expect` from `defmacro` to `defn` makes it fail with exactly
@@ -3307,8 +3308,8 @@ rules as already-shipped, settled fact, not as a proposal.**
 `runtime/src/codec.rs` states outright, in a normal doc comment rather than
 a TODO, "This is the whole of `structured-ports`'s safety rule, and it is one line: a
 guest..."; `runtime/src/conc.rs` says a capability "REVERSES [`host-abi`'s
-no-transfer rule], which is the [mechanism]"; `lib/flint/port.cljc` and
-`lib/flint/virtual.cljc` both build on port delegation as a working feature,
+no-transfer rule], which is the [mechanism]"; `lib/stdcore/flint/port.fln` and
+`lib/stdextra/flint/virtual.fln` both build on port delegation as a working feature,
 not a future one; and this pattern repeats identically across the Rust
 runtime and both the JVM and CLR ports' source. **The rule that ports and
 sentinels cannot be minted from a bare integer, and that a port can now be
@@ -3385,7 +3386,7 @@ itself — applied here to ports specifically.
 > compile-time half is `workspace-capabilities`: which workspace may name
 > which var, and now which builtin. At run time enforcement is mostly the
 > HOST's: a grant may be a map of name to policy rather than a bare set, and
-> `lib/flint/deps/resolve.cljc` says of it, "the policy is the host's, checked
+> `lib/deps/flint/deps/resolve.cljc` says of it, "the policy is the host's, checked
 > when a call happens" — so the receiver regulates against the options the
 > grant carries.
 >
@@ -3999,7 +4000,7 @@ else.
 > which moves the denominator the argument rests on.
 >
 > WHAT HAPPENED IN THE CODE IS NARROWER AND WORSE THAN A CANCELLATION.
-> `deps-of` in `lib/flint/deps/resolve.cljc` reads a manifest and returns real
+> `deps-of` in `lib/deps/flint/deps/resolve.cljc` reads a manifest and returns real
 > transitives for `:npm`; every other kind, Maven included, falls through to
 > `{}`. The docstring explains git's omission deliberately — its `deps.edn`
 > needs a checkout, so the CALLER fetches — and says nothing about Maven,
@@ -4379,11 +4380,11 @@ paragraph was not updated with it, so it went on citing a file the function had
 by then left. What holds today, re-probed:
 
 * **Rule 1 — you cannot lend what you do not hold — is enforced.**
-  `lending-errors` (`lib/flint/deps.cljc:724`) moved out of
+  `lending-errors` (`lib/deps/flint/deps.cljc:724`) moved out of
   `flint.deps.resolve`, which `flint.cli` can never require: that namespace
   pulls in `flint.deps.npm` and `flint.deps.git`, which are VIRTUAL and served
   by the CLI, so the rule was structurally unreachable from the only place a
-  refusal can happen. `lending-errors` (`lib/flint/cli.cljc:225`) is called
+  refusal can happen. `lending-errors` (`cli/lib/flint/cli.cljc:225`) is called
   before anything is fetched, and refuses `build`, `task`, `paths` and
   `fetch`. `bb test/cli.clj` passes today, including the refusal and both
   controls — a project that HOLDS the capability may lend it, and a project
@@ -4453,7 +4454,7 @@ entry — the exact "mint authority from nothing" case — used to be answered b
 `flint deps tree` with `left-pad 1.3.0` followed by `note: left-pad --
 :flint/capabilities-grant is not a key npm understands, and is ignored`, the
 same for a `:local/root` entry. The key was in no kind's known-key set
-(`lib/flint/deps.cljc` `coord-notes`), so it neither granted nor refused: it
+(`lib/deps/flint/deps.cljc` `coord-notes`), so it neither granted nor refused: it
 did nothing at all, silently, in the direction that reads like success.
 
 ### What was decided
@@ -6413,7 +6414,7 @@ a static property of the graph.
 
 **Divergence has two scales, and the small one already works.** flint's reader
 carries `:features #{:flint}` (`src/flint/compiler/reader.cljc`), so `#?(:clj a :flint b)`
-reads today, and `lib/clojure/core.cljc` already uses conditionals in anger.
+reads today, and `lib/stdcore/clojure/core.fln` already uses conditionals in anger.
 
 * small divergence → a reader conditional inside one `.cljc`
 * wholesale divergence → a separate `.fln` implementation
@@ -6450,7 +6451,7 @@ version of the audit item below. It condemns fewer and different ones than this
 section first claimed, and the correction is worth keeping because of HOW the
 first list was wrong:
 
-* ~~`lib/flint/table.cljc` uses `#flint/table`.~~ **It does not.** All five
+* ~~`lib/stdextra/flint/table.fln` uses `#flint/table`.~~ **It does not.** All five
   occurrences are inside comments, a docstring and two `str` literals — the
   file PRINTS the tag and READS it, and never writes one. The audit was a grep
   and a grep cannot tell a tag from the text of a tag. The standard library
@@ -6789,7 +6790,7 @@ newline.** All three runtimes agreed, which is why nothing caught it: the
 conformance suite compares the runtimes against each other, and they were
 wrong together. `\t`, `\r`, `\\` and ordinary characters were all fine.
 
-The cause is one line in `lib/flint/nfa.cljc`. An unanchored search is compiled
+The cause is one line in `lib/stdcore/flint/nfa.fln`. An unanchored search is compiled
 as a `.*?` prefix in front of the anchored program, and the prefix stepped
 forward with `OP-ANY`:
 
@@ -7226,7 +7227,7 @@ arriving as a number that looked like a finding.
 **Ratified:** ☐ not signed off
 
 **Status: built 2026-09-11, and checked against the code by building each case.**
-`lib/flint/deps/manifest.cljc` is new; `flint.deps/fetch-plan` and
+`lib/deps/flint/deps/manifest.cljc` is new; `flint.deps/fetch-plan` and
 `flint.deps.resolve/deps-of` both read it. `bb test/cli.clj` covers maven and
 npm transitives, `:local/root`, and the refusal wording, against local
 fixtures rather than the network.
@@ -7354,7 +7355,7 @@ than three.
 
 **Ratified:** ☐ not signed off
 
-**Status: built 2026-09-11.** `lib/flint/deps/registry.cljc` resolves
+**Status: built 2026-09-11.** `lib/deps/flint/deps/registry.cljc` resolves
 `:pod/version`; `bin/flint` fetches it; `cli/src/main.rs` boots what was
 fetched. `bb test/sysns.clj` boots a registry-fetched pod with the shipped
 binary; `bb test/cli.clj` covers artifact selection and the registry document
@@ -8011,7 +8012,7 @@ where a served namespace lives.
 
 Not re-checked here: this section's account of what `bin/flint` and
 `flint.cli/run` did BEFORE. `bin/flint` still mentions `node` and
-`lib/flint/cli.cljc` still returns `{:exec {...}}`, and whether those are the
+`cli/lib/flint/cli.cljc` still returns `{:exec {...}}`, and whether those are the
 same occurrences this section describes as removed was not established.
 
 Recorded 2026-09-12. `flint.sys.wasm` is the served namespace for running a
@@ -8407,7 +8408,7 @@ Identical, module size included.
 
 The `{:exec ...}` arm still exists and `flint task` still goes through it. This
 decision records the capability that makes removing it possible; removing it is
-a change to `lib/flint/cli.cljc` and to all three hosts, and is its own step.
+a change to `cli/lib/flint/cli.cljc` and to all three hosts, and is its own step.
 
 ## aot-diverges-between-hosts
 
@@ -9236,8 +9237,8 @@ nobody does — a program names its functions at compile time like any other.
 **Ratified:** ☐ not signed off
 
 **Status: BUILT -- verified 2026-09-19, and this section was written BEFORE it
-was built, which is the direction that misleads least.** `lib/flint/wire.cljc`
-is the codec in flint and it is live: `lib/flint/port.cljc` requires it and
+was built, which is the direction that misleads least.** `lib/stdcore/flint/wire.fln`
+is the codec in flint and it is live: `lib/stdcore/flint/port.fln` requires it and
 calls `wire/encode` at line 111. The primitives underneath are generated --
 `kin/wirecore.kin` and `kin/wirescan.kin`.
 
@@ -9949,7 +9950,7 @@ answer cost a full run.
 ### The ports could not send on a bridge at all, and `bin/test` cannot see it
 
 **A regression this section introduced at step 2, found five steps later.**
-When `port/send` switched to `flint.wire`, `lib/flint/port.cljc` began handing
+When `port/send` switched to `flint.wire`, `lib/stdcore/flint/port.fln` began handing
 `flint/port-send` a WRITER on a bridge. Native grew a branch for that. The JVM
 and the CLR did not: their `send` called `Codec.encode` on the writer
 unconditionally, which refused it, so **every bridge send on both ports threw**
@@ -10728,7 +10729,7 @@ Three things this cost, each worth keeping:
   first for the same reason, and this now does too.
 * **The standard library is EMBEDDED in the CLI** via `cli/build.rs`, whose
   `rerun-if-changed` does not fire for files inside `lib/`. An edit to
-  `lib/flint/host.cljc` reached nothing until `touch cli/build.rs`, and the
+  `lib/stdextra/flint/host.fln` reached nothing until `touch cli/build.rs`, and the
   symptom was the new builtin insisting its argument was not a writer while the
   source plainly passed one.
 
@@ -14505,7 +14506,7 @@ today a port's metadata does not cross at all, which is the safe default), the
 label moving out of `PT_LABEL`, and the protocols. Originally written down before any of it
 existed, because an earlier version of the idea was decided on 2026-09-14 and
 then lost: it was never recorded here, the work that followed built `WireMeta`
-and stopped, and comments in `lib/flint/protocols.cljc`,
+and stopped, and comments in `lib/stdcore/flint/protocols.fln`,
 `runtime/src/codec.rs` and `sdks/esm/src/codec.js` went on saying "a port
 answers with its protocol list" about code that does not do it. Checked
 2026-09-30 by running a program: `(with-meta port {...})` returns the port
@@ -15401,7 +15402,7 @@ the same files hand the compiler equal values.
   Clojure with the kin Java reader (§8 step 1).
 
 **flint has `defprotocol` and no `reify`.** Checked 2026-10-06 in
-`lib/clojure/core.cljc`: `defprotocol` dispatches on METADATA first and then on
+`lib/stdcore/clojure/core.fln`: `defprotocol` dispatches on METADATA first and then on
 kind, keyed by the fully-qualified method symbol -- Clojure's
 `:extend-via-metadata` convention -- so a flint value implements the protocol as
 `(with-meta {} {'flint.compiler.resolve/resolve-wave f})`. The declaration splices
@@ -15572,7 +15573,7 @@ sizes by `wc -l`, counted 2026-10-06 at this tree):**
 | `flint.wire` | 225 | hardcoded root: the call loop names `flint.wire/read-from` by var |
 | `flint.protocols` | 271 | `flint.port` and `flint.wire` both `:require` it (`WireMeta`); `clojure.core` also requires it |
 | `flint.core` | 107 | `flint.protocols` requires it (`:refer [kind]`); `clojure.core` requires it too |
-| `flint.regex` | 477 | `clojure.core` requires it directly, for `re-pattern`/`re-find`/`re-matches`/`re-seq` (`lib/clojure/core.cljc:1607-1612`) |
+| `flint.regex` | 477 | `clojure.core` requires it directly, for `re-pattern`/`re-find`/`re-matches`/`re-seq` (`lib/stdcore/clojure/core.fln:1607-1612`) |
 | `clojure.string` | 202 | `flint.regex` requires it |
 | `flint.nfa` | 185 | `flint.regex` requires it (the shared NFA compiler `flint.pike` also uses, but `flint.pike` itself is not in the closure) |
 
@@ -15637,8 +15638,8 @@ those vars back out under its own public names, so a program that requires
 `clojure.core` sees no difference. This is a design only -- nothing below
 moves a file -- surveyed against this tree at `7577a7ce`.
 
-* **What the four reach.** Followed `lib/flint/port.cljc`,
-  `lib/flint/wire.cljc`, `lib/flint/protocols.cljc` and `lib/flint/core.cljc`'s
+* **What the four reach.** Followed `lib/stdcore/flint/port.fln`,
+  `lib/stdcore/flint/wire.fln`, `lib/stdcore/flint/protocols.fln` and `lib/stdcore/flint/core.fln`'s
   own text (none of the four `:require`s `clojure.core`; all four get it
   through the implicit refer every namespace gets) for every symbol that is
   not a special form (`src/flint/compiler/analyzer.cljc`'s `special-forms`, which
@@ -15652,7 +15653,7 @@ moves a file -- surveyed against this tree at `7577a7ce`.
   `comment` -- both are therefore DEAD CODE in the current tree, shadowed by
   the bootstrap table for every caller, found while tracing this closure and
   not fixed here). Then walked the reached vars' own bodies in
-  `lib/clojure/core.cljc` to a fixed point the same way, textually, with
+  `lib/stdcore/clojure/core.fln` to a fixed point the same way, textually, with
   three corrections a plain grep would have missed (`AGENTS.md` #1's "a
   count produced by a grep counts what the pattern understood"): a token
   immediately after `:` is a keyword, not a var (`:map`/`:set`/`:vector` in
@@ -15677,7 +15678,7 @@ moves a file -- surveyed against this tree at `7577a7ce`.
   `filter-over-vec`, `reduce-seq`, `reduce-indexed`, `seq-binding-form`),
   plus one bare `def` (`gensym-counter`, an atom `gensym` closes over).
   Approx 510 lines, summing each reached top-level form's own line span
-  (method: a script-assisted textual closure over `lib/clojure/core.cljc`,
+  (method: a script-assisted textual closure over `lib/stdcore/clojure/core.fln`,
   manually corrected for the three cases above; not independently
   cross-checked against a second reader, so treat the exact count as
   approximate rather than exact -- the shape, not the number to the var, is
@@ -16047,7 +16048,7 @@ from itself.
   2. **The move changes every stdlib file's `:file` metadata, so it needs a
      deliberate rebaseline, not a comparison against the old tree.** A
      namespace's `:file` is stamped from the path its reader read, so
-     renaming `lib/clojure/core.cljc` to `lib/stdcore/clojure/core.fln`
+     renaming `lib/stdcore/clojure/core.fln` to `lib/stdcore/clojure/core.fln`
      changes that metadata for all 36 namespaces at once, which changes the
      embedded stdlib forms and any image whose metadata is compared
      byte-for-byte alongside its code -- the same class of trap
@@ -16383,7 +16384,7 @@ sizes are estimates from reading the code, not measurements.
    `position-meta`); that merge's `transient` call promotes even a small
    array map to a CHAMP on EITHER side (`kin/maptrans.kin`: "AN ARRAY-MAP IS
    PROMOTED FIRST... there is one transient implementation and it is the
-   trie's" -- and the guest's own `lib/clojure/core.cljc` `merge` does the
+   trie's" -- and the guest's own `lib/stdcore/clojure/core.fln` `merge` does the
    same `(transient (first ms))`). Past that point the kin reader's own
    reconstruction check (`pos-parts`) accepts the resulting 7-key map for the
    compact position encoding, while the guest's rejects it for the same map
@@ -16719,7 +16720,10 @@ sizes are estimates from reading the code, not measurements.
    Mostly deletion.
 8. **The snapshot cache**, as its own decision once §7's ordering question is
    answered.
-9. **Stdlib directory split and `.fln` rename, as one `git mv`.** Every
+9. **Stdlib directory split and `.fln` rename, as one `git mv`.** *BUILT
+   2026-10-08 (branch `restructure`), with `flint.cli` and `flint.deps` moved
+   to roots of their own in the same change -- see `DECISIONS.md#four-units`
+   for what was measured; the `defalias` half is not built yet.* Every
    `lib/*.cljc` moves under `lib/stdcore/` or `lib/stdextra/` AND is renamed
    to `.fln` in the same change (§4's "one churn, not two", above);
    `clojure/core.cljc` additionally grows the `defalias` forms that alias
@@ -17039,7 +17043,7 @@ function the loop looks up by name and applies, inside a `try` that already
 catches whatever that function does, so refusing the loop its OWN reference to
 `flint.port/send` and `flint.wire/read-from` protected nothing -- it only forced
 `src/flint/compiler/callentry.cljc` to re-implement their wire codec in ~30
-`flint.rt/wire-*` builtins, a second copy of `lib/flint/wire.cljc` that had
+`flint.rt/wire-*` builtins, a second copy of `lib/stdcore/flint/wire.fln` that had
 already drifted from it: the re-implementation never asked `WireMeta`, so a
 call's reply crossed with no metadata REGARDLESS of what the value opted in
 to, which the paragraph below recorded as an open question rather than the bug
@@ -17505,7 +17509,7 @@ now asks the same thing on every machine, forever, not just until the next
 ### Which Unicode version, and why 18.0.0
 
 **Nothing else in this codebase assumes a Unicode version, so there was no
-existing constraint to match.** Checked before picking: `lib/flint/regex.cljc`
+existing constraint to match.** Checked before picking: `lib/stdcore/flint/regex.fln`
 implements `\w`/`\d`/`\s` as hand-coded ASCII ranges (`word-cp?`, `space-cp?`),
 not Unicode property classes, and inline flags / `(?i)` / locale-aware
 matching are refused outright by the parser ("only `(?: )` groups are
@@ -17724,7 +17728,7 @@ order, both steps), then two checks:
    check in that suite drives some `flint.sys.*`/pod/sandbox call and every
    one of those compiles through `flint.virtual/call`.
 
-Reverted (`git checkout -- lib/flint/virtual.cljc`), `bin/build-dist` and
+Reverted (`git checkout -- lib/stdextra/flint/virtual.fln`), `bin/build-dist` and
 `cargo build` run again, both checks re-run clean.
 
 **What this does NOT settle.** "A program naming `flint.virtual` directly
@@ -17753,7 +17757,10 @@ their own, `flint/deps`, with no grant. `flint.deps.manifest` and
 **Ratified:** ☐ not signed off
 
 **Status: shipped — verified 2026-10-06 on the native CLI by two adversarial
-probes (below) against a binary built from this change.**
+probes (below) against a binary built from this change.** *2026-10-08: the
+four files moved to their own source root, `lib/deps/`, and every door now
+assigns the workspace by containment; the per-door prefix mechanics described
+below are history (`DECISIONS.md#four-units`).*
 
 **Why a separate workspace at all.** Every `lib/` file inherits
 `flint/flint`'s grant, `[:host]`, by nothing more than living under `lib/`
@@ -17765,7 +17772,7 @@ virtual namespace. `flint.deps.resolve` additionally requires the virtual
 a RUNTIME `:with` grant the host checks when the port opens
 (`doc/api-review.md`'s "Served, not linked" section: "Gated by `:with
 [deps]`"), not by this compile-time workspace mechanism. So none of the four
-needs `:host`, and `flint/deps`'s `deps.edn` (`lib/flint/deps/deps.edn`)
+needs `:host`, and `flint/deps`'s `deps.edn` (`lib/deps/deps.edn`)
 grants nothing -- the four files stop inheriting a capability they never
 asked for and never used.
 
@@ -17803,10 +17810,10 @@ directly by glue code -- so those two are marked `^:internal` and
 **Four doors, each with its own copy, same shape `AGENTS.md` names for the
 stdlib's own `deps.edn`:**
 
-* `lib/flint/deps/deps.edn` is the one new fact (`{:flint/workspace
+* `lib/deps/deps.edn` is the one new fact (`{:flint/workspace
   flint/deps}`), governing all FOUR files by NAMESPACE PREFIX
   (`"flint/deps"`, no trailing slash) rather than by directory containment --
-  `flint.deps` itself is `lib/flint/deps.cljc`, a file beside this directory,
+  `flint.deps` itself is `lib/deps/flint/deps.cljc`, a file beside this directory,
   not inside it, so a slash-terminated prefix would miss it.
 * **Native CLI**: `cli/build.rs` embeds it as `DEPS_WORKSPACE_DEPS`
   (alongside the existing `STDLIB_DEPS`); `cli/src/main.rs` pushes a
@@ -17829,20 +17836,20 @@ stdlib's own `deps.edn`:**
   CLI and the ESM SDK agreed on the new one -- a door disagreement
   indistinguishable from a bug, the exact failure mode `AGENTS.md` §1
   describes. Fixed the same way: `sdks/cli/build` now also copies
-  `lib/flint/deps/deps.edn` to `dist/flint-deps-deps.edn`;
+  `lib/deps/deps.edn` to `dist/flint-deps-deps.edn`;
   `artifacts.mjs` reads it as `depsWorkspaceDeps()`; `spec.mjs`'s
   `buildSpec` takes a `depsWorkspaceDeps` param and pushes the `flint/deps`
   entry before `clojure/`/`flint/`, same as the other two; `cli.mjs`'s six
   call sites pass it through.
 * **`bin/flint`** cannot do this by directory root the way its own
   `project-of`/`root-of` otherwise works, because `flint.deps` is a FILE
-  (`lib/flint/deps.cljc`) beside the directory (`lib/flint/deps/`) its
+  (`lib/deps/flint/deps.cljc`) beside the directory (`lib/flint/deps/`) its
   siblings live in -- the two cannot share a directory-based root without
   ALSO pulling in every other unrelated file in `lib/flint/`. Fixed in
   `root-of` itself: when the matched root is the plain `lib` root and the
   file's path contains `/lib/flint/deps.cljc` or `/lib/flint/deps/`, the
   returned root is one path segment deeper (`lib/flint/deps`), so
-  `project-of` reads `lib/flint/deps/deps.edn` instead of `lib/deps.edn` for
+  `project-of` reads `lib/deps/deps.edn` instead of `lib/deps.edn` for
   exactly those four files and nothing else in `lib/flint/`.
 * **JVM and CLR have no fifth door to patch**: `runtimes/jvm` and
   `runtimes/clr` name `flint.deps` nowhere (`grep -rln "flint.deps"
@@ -18361,3 +18368,104 @@ absolute one, by default.
 audited.** `sdks/esm` and `sdks/cli`'s own build scripts were checked and do
 not invoke cargo or rustc themselves -- they copy `dist/`'s already-fixed
 files -- so they were not re-audited independently.
+
+## four-units
+
+**The guest source flint ships is four units, each its own workspace in its own source root**
+
+**Ratified:** ☐ not signed off
+
+**Status (2026-10-08, branch `restructure`): BUILT** -- the layout below, every
+door embedding it by root rather than by namespace prefix, and the separate
+blobs. What proves it is listed under each part. Decided by the maintainer
+(2026-10-08); this records how it was built and what was found.
+
+### What was decided
+
+Four units, four workspaces, four (five) source roots:
+
+| unit | workspace | source root(s) | extension | grant | shipped with |
+|---|---|---|---|---|---|
+| the standard library | `flint/flint` | `lib/stdcore/`, `lib/stdextra/` | `.fln` | `[:host]` | every door |
+| the compiler | `flint/compiler` | `src/` | `.cljc` | none | every door, as `flintc` |
+| `flint.cli` | `flint/cli` | `cli/lib/` | `.cljc` | none | the native and npm CLIs only |
+| `flint.deps` and siblings | `flint/deps` | `lib/deps/` | `.cljc` | none | both CLIs; an optional ESM building block |
+
+* **Ownership is by CONTAINMENT, everywhere.** A root's workspace is the
+  `deps.edn` in it, or failing that the one a directory up -- the rule
+  `bin/flint`'s `project-of` always followed. `lib/deps.edn` therefore owns
+  both standard-library roots (stdcore and stdextra stay ONE workspace, as
+  `DECISIONS.md#namespaces-over-the-system-port` §4 requires for
+  `flint.core.impl`), and `lib/deps/deps.edn` owns `lib/deps/`. The
+  namespace-PREFIX ownership every door applied by hand (`"flint/deps"` ahead
+  of `"clojure/"` and `"flint/"`, `DECISIONS.md#flint-deps-is-its-own-workspace`)
+  is gone from all four doors: `bin/flint`'s `root-of` lost its path
+  carve-out and takes the innermost root; the native CLI gives every embedded
+  file its own root's workspace as an exact-path entry (`cli/build.rs` embeds
+  the root beside each file); the JavaScript doors already carried the
+  workspace inside each pre-read answer (`bin/build-stdlib-forms` now reads it
+  per root). One consequence in the native CLI: a project file under `flint/`
+  no longer picks up `flint/flint`'s grant from its path (the prefix hole
+  `#namespaces-over-the-system-port` records), unless it sits at exactly a
+  shipped file's path. *Probed on the native CLI built from this change*: a
+  project whose `flint/evil.cljc` calls `flint.host/ask` is refused, "guarded
+  with #{:host} by flint/flint; this program does not hold #{:host}"; the
+  control, the same file in a root whose `deps.edn` grants `:host`, compiles.
+* **The standard library is `.fln`, all of it, and split by directory into
+  stdcore and stdextra in the same move** ("one churn",
+  `#namespaces-over-the-system-port` §4 and migration step 9). `bin/check`
+  fails on any non-`.fln` file under the two roots. stdcore is a DIRECTORY
+  now, and `bin/build-stdlib-forms` still ASKS THE COMPILER which namespaces
+  every image needs -- and fails the build, naming the file to move, when the
+  answer and `lib/stdcore/` disagree. At this commit the compiler's answer is
+  the same nine: `clojure.core`, `clojure.string`, `flint.check`,
+  `flint.core`, `flint.nfa`, `flint.port`, `flint.protocols`, `flint.regex`,
+  `flint.wire`.
+* **`flint.cli` and `flint.deps` stay `.cljc`**: the JVM Clojure driver loads
+  both as Clojure (`bin/flint`'s classpath is now `src`, `driver`,
+  `lib/deps`, `cli/lib` -- `lib/` itself is off it, since nothing under it is
+  loadable by Clojure any more), and `bin/check` asserts the four files.
+* **Separate blobs.** `bin/build-stdlib-forms` writes `dist/stdcore.forms`,
+  `dist/stdextra.forms`, `dist/deps.forms` and `dist/cli.forms`. The ESM SDK
+  bundles stdcore (core), stdextra (`@3sln/flint/stdextra`) and deps (NEW,
+  `@3sln/flint/deps`, `deps()`), and never `cli.forms`; the npm CLI copies all
+  four and chains `stdextra, deps, cli, catalogue, roots`; the native CLI
+  embeds all four roots; the Rust SDK embeds the standard library and
+  `flint.deps`, not `flint.cli`.
+* **Every embedding carries the dialect explicitly.** The JavaScript doors'
+  answers always carried `:dialect`. `cli/build.rs` now reads the shipped
+  source with the kin reader (`flint_rt::hostread::read_text`, deferred)
+  rather than by running the embedded compiler's `preread` mode, which read
+  with `flint.compiler.reader` and let `file-answer` derive the dialect from
+  the path; the index carries the dialect beside each file's bytes, and both
+  the split spec and the resolver answer send it (`Body::Forms(bytes,
+  dialect)`). `cli/build.rs` no longer loads the compiler at all, so the
+  `flint-conc` build-dependency is gone.
+
+### What changed in the artefacts, measured
+
+* **Corpus images: no change at all.** Every top-level `corpus/*.cljc`
+  compiled by the native CLI, `:to :wasm` plain and `:optimize [perf]` and
+  `:to :llvm`, against the binary built from the parent commit: **63 of 63
+  byte-identical** (`cmp`), `caesar` and `dijkstra` refused by both. The
+  `:file` metadata the move changes (`clojure/core.cljc` to
+  `clojure/core.fln`) and the dialect it changes (`:portable` to `:flint`)
+  reach the pre-read forms but none of these images; the "rebaseline" the
+  migration plan anticipated turned out to be needed for the embedded blobs
+  only, which no harness compares across commits.
+* **The blobs, rebaselined** (`bin/build-dist`'s own output, before at
+  `b2f627bb`, after at this commit): `stdcore.forms` 155 731 -> 155 626 bytes
+  (same nine namespaces; the extension and dialect of each answer);
+  `stdextra.forms` 201 040 bytes / 26 namespaces -> 111 933 / 21, plus
+  `deps.forms` 75 022 / 4 and `cli.forms` 13 847 / 1.
+* The native binary's pre-read: 35 files, 348 075 bytes of forms
+  (`cli/build.rs`'s own warning line).
+
+### Found doing it
+
+* **The Rust SDK cannot say a source is `.fln`.** Its `Compile.resolve` is
+  `Fn(&str) -> Option<String>` (shared with the C ABI), so a namespace an
+  embedder resolves is labelled `.cljc` and reads as `:portable` whatever file
+  it came from. The embedded standard library is keyed by its real extension
+  and is unaffected. Fixing it is a signature change across `sdks/rust` and
+  `sdks/c` -- migration step 5's territory -- recorded rather than made.

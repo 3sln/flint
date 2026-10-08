@@ -86,6 +86,7 @@ pub(crate) fn sources() -> Vec<(String, String)> {
     let root = root();
     let mut out = Vec::new();
     walk(&root.join("lib"), "", true, &mut out);
+    walk(&root.join("cli/lib"), "cli/lib", true, &mut out);
     walk(&root.join("src"), "src", true, &mut out);
     walk(&root.join("corpus"), "corpus", true, &mut out);
     // Fixtures only: the `.clj` files directly under `test/` are babashka

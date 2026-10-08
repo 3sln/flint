@@ -1336,7 +1336,7 @@ for hqf in hostreq initpark selfjoin selfjoin-min plainthrow kwrow; do
       || { cat "$FLINT_SCRATCH"/flint-hq-native.out; \
            echo "  FAIL a self-join is not refused by name [native, $hqf]"; exit 1; }
   fi
-  # A ROW REF READS AS THE MAP IT IS, which `lib/flint/table.cljc` promises in
+  # A ROW REF READS AS THE MAP IT IS, which `lib/stdextra/flint/table.fln` promises in
   # as many words -- "`count`, `get`, `(:col row)`, `keys`, `vals` and `=`
   # against a map all work". The two spellings take different paths: native
   # answers `(:col row)` from an arm of `apply_keyword` that names table refs,

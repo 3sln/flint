@@ -1,0 +1,25 @@
+;; flint.deps's own workspace, separate from the stdlib's flint/flint
+;; (`DECISIONS.md#flint-deps-is-its-own-workspace`).
+;;
+;; ITS OWN SOURCE ROOT, `lib/deps/`, so it is owned by CONTAINMENT like every
+;; other root: `flint.deps` is `lib/deps/flint/deps.cljc` and its three
+;; siblings sit under `lib/deps/flint/deps/`. It used to be governed by the
+;; namespace PREFIX "flint/deps" inside `lib/`, which every door had to apply
+;; by hand (`DECISIONS.md#four-units`).
+;;
+;; `.cljc`, NOT `.fln`, ON PURPOSE: the JVM Clojure driver (`bin/flint`) loads
+;; `flint.deps`, `flint.deps.manifest` and `flint.deps.registry` as Clojure,
+;; and Clojure cannot load a `.fln` (`bin/check` asserts it).
+;;
+;; Shipped with the native and npm CLIs, and an OPTIONAL building block in the
+;; ESM SDK (`@3sln/flint/deps`); never part of the standard library.
+;;
+;; NO GRANT. `flint.deps`/`flint.deps.manifest`/`flint.deps.registry` are pure
+;; data manipulation (`clojure.edn`/`clojure.string` over `deps.edn`,
+;; `package.json`, `pom.xml`, a registry document) -- no `:host`-guarded
+;; builtin, no virtual namespace require. `flint.deps.resolve` requires the
+;; virtual `flint.deps.npm`/`-git`/`-mvn`, but reaching a virtual namespace is
+;; gated by a RUNTIME `:with` grant the host checks when the port is opened
+;; (`doc/api-review.md`'s "Served, not linked" section), not by this
+;; compile-time workspace mechanism.
+{:flint/workspace flint/deps}

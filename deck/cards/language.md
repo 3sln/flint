@@ -110,7 +110,7 @@ runtime `reader-tag-of` lookup is not yet built).
 Flint has no `deftype`, `defrecord`, `reify` or `class` — there are no host
 types to extend. Protocol dispatch instead checks, in order, a value's
 **metadata**, then its **kind** — a small, closed set of tags returned by
-`(flint.rt/kind x)`. `lib/flint/core.cljc`'s docstring for `kind` names
+`(flint.rt/kind x)`. `lib/stdcore/flint/core.fln`'s docstring for `kind` names
 `:nil :boolean :number :string :keyword :symbol :vector :map :set :list :fn
 :port :thread :atom :var :regex :exception :other`; the set has grown since —
 `test/common/lang/tagged.cljc` confirms `(flint.rt/kind (tagged-literal ...))`

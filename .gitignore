@@ -40,6 +40,8 @@ dist/flintc.sources
 dist/flint-reader.wasm
 dist/stdcore.forms
 dist/stdextra.forms
+dist/deps.forms
+dist/cli.forms
 # `bin/build-dist` builds these three to a temp path first and moves them over
 # the real one only when the bytes differ, so an unchanged compiler keeps its
 # mtime; a build that dies before that move can leave the temp file behind.

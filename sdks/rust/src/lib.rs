@@ -94,7 +94,9 @@ pub fn dir_resolver(root: impl Into<std::path::PathBuf>) -> impl Fn(&str) -> Opt
     let root = root.into();
     move |ns: &str| {
         let path = ns.replace('-', "_").replace('.', "/");
-        for ext in [".cljc", ".clj"] {
+        // Most specific first (`DECISIONS.md#dialects-and-preludes`): a
+        // namespace may have both a `.fln` and a `.cljc`.
+        for ext in [".fln", ".cljc", ".clj"] {
             let p = root.join(format!("{path}{ext}"));
             if let Ok(s) = std::fs::read_to_string(&p) {
                 return Some(s);
@@ -200,6 +202,18 @@ impl Compiler {
                         want.push(name);
                     }
                 }
+                // `.cljc` ON PURPOSE, not `.fln`: this is a namespace `STDLIB`
+                // did not already have (an embedder's own program, which the
+                // module doc's example resolves as `src/{ns}.cljc`), and
+                // `resolve`'s `Fn(&str) -> Option<String>` contract -- shared
+                // with the C ABI in `capi.rs`, which only ever hands back a
+                // string -- has no way to say which extension a source came
+                // from. A `.fln` file under a caller's own `resolve` would be
+                // found (the probe above now tries that extension), but
+                // labelled `.cljc` here, which reads it as the `:portable`
+                // dialect rather than `:flint` (`flint.compiler.resolve/dialect-of`).
+                // Not a concern for `STDLIB` itself, which `build.rs` keys by
+                // each file's real extension before this loop ever runs.
                 let path = format!("{}.cljc", ns.replace('-', "_").replace('.', "/"));
                 files.insert(path, src);
             }

@@ -36,13 +36,15 @@ for f in flintc.wasm flint-runtime.wasm flint-runtime-aot.wasm slots.json slots-
   printf '    %-24s %s\n' "$f" "$(wc -c < "dist/$f" | tr -d ' ') bytes"
 done
 
-echo "==> the standard library, read, in its two layers"
+echo "==> the standard library, read, in its two layers, and flint.deps and flint.cli"
 # `bin/build-stdlib-forms`' blobs, COPIED: stdcore, which this CLI answers before
 # its resolver is asked anything, and stdextra, which its resolver consults
 # first (`DECISIONS.md#namespaces-over-the-system-port` §4). Each answer already
 # carries the workspace and grants of the `deps.edn` that owns its file, so there
-# is no `deps.edn` to copy and no prefix table to rebuild here.
-for f in stdcore.forms stdextra.forms; do
+# is no `deps.edn` to copy and no prefix table to rebuild here. `flint.deps` and
+# `flint.cli` are their own units, shipped with the two CLIs and not as part of
+# the standard library (`DECISIONS.md#four-units`).
+for f in stdcore.forms stdextra.forms deps.forms cli.forms; do
   cp "$root/dist/$f" "dist/$f"
   printf '    %-24s %s\n' "$f" "$(wc -c < "dist/$f" | tr -d ' ')"
 done

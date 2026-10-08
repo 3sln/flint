@@ -34,7 +34,7 @@ the same host answers, in the same order, gives the same result every time.
 (defn result [t])   ;; what it returned, or what it threw; nil until it finishes
 (defn join [t])      ;; park until t finishes; rethrows on failure
 ```
-— `lib/flint/thread.cljc`. `join` *parks* rather than spinning, deliberately:
+— `lib/stdextra/flint/thread.fln`. `join` *parks* rather than spinning, deliberately:
 a spinning thread is always runnable, and the scheduler would never get a
 chance to hand control back to anything else.
 
@@ -69,7 +69,7 @@ behaves:
   (p/send r :now)
   (p/receive r))
 ```
-— `lib/flint/port.cljc`. `channel` takes an optional buffer size (default 16
+— `lib/stdcore/flint/port.fln`. `channel` takes an optional buffer size (default 16
 messages) and a label for diagnostics (shown in a deadlock report):
 `(channel)`, `(channel "label")`, `(channel cap label)`.
 

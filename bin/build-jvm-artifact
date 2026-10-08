@@ -20,7 +20,7 @@
 ;; already embeds `dist/flint-runtime.wasm`; see the report.
 (require '[babashka.fs :as fs] '[clojure.edn :as edn] '[babashka.process :as p])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
-(babashka.classpath/add-classpath (str root "/src:" root "/lib"))
+(babashka.classpath/add-classpath (str root "/src"))
 (require '[flint.compiler.jvm :as jvm] '[flint.compiler.jar :as jar] '[flint.rt])
 
 (defn die! [m] (binding [*out* *err*] (println m)) (System/exit 1))

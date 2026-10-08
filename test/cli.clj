@@ -1,16 +1,17 @@
 ;; The CLI surface (`DECISIONS.md#cli`).
 ;;
-;; The logic lives in `lib/flint/cli.cljc` and `lib/flint/deps.cljc` -- as flint
-;; code, reaching the project through the `:fs` CAPABILITY -- because 0021's
-;; strongest argument is that flint should be usable by someone with no Clojure
-;; toolchain, and `bin/flint` is a babashka script. What has to survive that move
-;; is this logic; the rest is a host wrapper.
+;; The logic lives in `cli/lib/flint/cli.cljc` and `lib/deps/flint/deps.cljc` --
+;; as flint code, reaching the project through the `:fs` CAPABILITY -- because
+;; 0021's strongest argument is that flint should be usable by someone with no
+;; Clojure toolchain, and `bin/flint` is a babashka script. What has to survive
+;; that move is this logic; the rest is a host wrapper.
 ;;
 ;; So the test runs the CLI as a compiled flint program, not as a script.
 (require '[clojure.string :as str] '[babashka.fs :as fs] '[clojure.java.io :as io])
 ;; The URL derivation is pure, so it is checked directly rather than through a
 ;; build -- and against the same code the compiled CLI runs, not a copy.
-(babashka.classpath/add-classpath "lib")
+;; `flint.deps` now lives under its own root, `lib/deps` (workspace flint/deps).
+(babashka.classpath/add-classpath "lib/deps")
 (require '[flint.deps :as fdeps])
 (def deps-ns-npm-tarball fdeps/npm-tarball)
 
@@ -492,7 +493,8 @@
 ;; knows, one walk consumes every format, and the kinds table says which
 ;; formats a kind may carry.
 (println "cli: manifest scanners")
-(babashka.classpath/add-classpath "lib")
+;; `flint.deps.manifest`/`flint.deps.registry` live under `lib/deps` too.
+(babashka.classpath/add-classpath "lib/deps")
 (require '[flint.deps.manifest :as fman] '[flint.deps.registry :as freg])
 
 (check "package.json gives npm coordinates, dependencies only"

@@ -171,7 +171,7 @@ fn the_initialisers_run_before_the_first_call() {
 /// had no `K_WITH_META` case at all, so `tagged`'s reply decoded as a bare
 /// `{:a 1}`, indistinguishable from `untagged`'s. PASSES after: the loop calls
 /// `flint.port/send`, which asks `WireMeta` and wraps the value in `K_WITH_META`
-/// before encoding it, same as `lib/flint/port.cljc`'s own `send` would.
+/// before encoding it, same as `lib/stdcore/flint/port.fln`'s own `send` would.
 #[test]
 fn call_reply_carries_wire_meta() {
     let img = image();

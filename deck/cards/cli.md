@@ -118,6 +118,6 @@ Separately from the native CLI above, `bin/flint` is a babashka script used
 to build and self-host flint during development — it has its own, lower-level
 flag syntax (`:src`, `:fn`, `:exclude`, `:wasm-path`, `--self`, `--disasm`)
 and project-management subcommands (`tasks`, `build`, `fetch`) implemented in
-`lib/flint/cli.cljc`. It's how the compiler bootstraps itself before the
+`cli/lib/flint/cli.cljc`. It's how the compiler bootstraps itself before the
 native binary exists, and is development tooling rather than the end-user
 interface described above.

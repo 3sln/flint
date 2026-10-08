@@ -52,7 +52,7 @@ fi
 # INVOCATION TIME -- a classpath STRING (`-Scp`), computed once and cached.
 # Two separate collisions, found in that order:
 #
-# (1) `flint.cli`/`flint.deps` (lib/flint/cli.cljc, lib/flint/deps.cljc) read
+# (1) `flint.cli`/`flint.deps` (cli/lib/flint/cli.cljc, lib/deps/flint/deps.cljc) read
 #     a "deps.edn" in the CURRENT DIRECTORY as a flint PROJECT's own manifest
 #     -- `:paths`/`:deps` are the same keys Clojure's own tool uses, on
 #     purpose, for a familiar shape. A tracked root `deps.edn` giving the JVM
@@ -61,7 +61,7 @@ fi
 #     task`/`build`/`deps`, run from the repo root (as several `test/cli.clj`
 #     scenarios do), read it as exactly that: `cheshire`/`org.clojure/data.xml`
 #     below -- needed only so THIS JVM can load
-#     `lib/flint/deps/manifest.cljc`'s `:clj` branch -- turned up as flint
+#     `lib/deps/flint/deps/manifest.cljc`'s `:clj` branch -- turned up as flint
 #     dependencies to fetch, one of them pulling in a transitive
 #     `com.fasterxml.jackson.core/jackson-databind` with no pinned version,
 #     and "flint cannot fetch everything this project reaches" where a clean
@@ -84,7 +84,7 @@ fi
 # and cached at `target/flint-driver.cp`, invalidated by comparing the first
 # line against `DEPS_EDN` below -- so editing the Maven coordinates here
 # recomputes it, and nothing else does.
-DEPS_EDN="{:paths [\"$ROOT/src\" \"$ROOT/driver\" \"$ROOT/lib\"]
+DEPS_EDN="{:paths [\"$ROOT/src\" \"$ROOT/driver\" \"$ROOT/lib/deps\" \"$ROOT/cli/lib\"]
            :deps {cheshire/cheshire {:mvn/version \"5.13.0\"}
                   org.clojure/data.xml {:mvn/version \"0.2.0-alpha9\"}}}"
 CPFILE="$ROOT/target/flint-driver.cp"

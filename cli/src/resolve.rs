@@ -114,7 +114,10 @@ impl Answers {
         let mut m = vec![(kw("file"), Val::Str(path.clone()))];
         match &self.inputs.files[&path] {
             Body::Text(t) => m.push((kw("source"), Val::Str(t.clone()))),
-            Body::Forms(b) => m.push((kw("forms"), Val::Bytes(b.to_vec()))),
+            Body::Forms(b, d) => {
+                m.push((kw("forms"), Val::Bytes(b.to_vec())));
+                m.push((kw("dialect"), kw(d)));
+            }
             Body::Read(b, d) => {
                 m.push((kw("forms"), Val::Bytes(b.clone())));
                 m.push((kw("dialect"), kw(d)));
@@ -358,7 +361,7 @@ mod tests {
         let dir = temp_project("t2");
         let a = Answers::new(&[dir.clone()], &[], None).unwrap();
         let v = a.answer("clojure.core");
-        assert_eq!(v.get("file").and_then(Val::as_str), Some("clojure/core.cljc"));
+        assert_eq!(v.get("file").and_then(Val::as_str), Some("clojure/core.fln"));
         assert!(v.get("forms").is_some());
         assert_eq!(v.get("workspace"), Some(&Val::Symbol(Some("flint".into()), "flint".into())));
         // WHAT `lib/deps.edn` GRANTS, read from it rather than restated: this

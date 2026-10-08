@@ -878,7 +878,7 @@ directly, which is every slot on the JVM and CLR.
 because the node held an ordinary value that is now unreachable.
 
 **It is not prompt, and that is a stated house position rather than a
-concession.** `lib/flint/port.cljc` says it for ports:
+concession.** `lib/stdcore/flint/port.fln` says it for ports:
 
 > `with-open` closes on the way out, including on a throw, and it is the shape
 > to reach for. If a script simply drops its last reference to a port, the
@@ -1442,7 +1442,7 @@ needs one.
 
 ## What a protocol call costs here, specifically
 
-`find-protocol-method` (`lib/clojure/core.cljc:1754-1763`) is:
+`find-protocol-method` (`lib/stdcore/clojure/core.fln:1754-1763`) is:
 
 ```clojure
   (or (get (meta x) mkey)
@@ -1491,7 +1491,7 @@ path, and the whole question is which operations those are.
 ## The principle
 
 It is already written in the codebase, above `pr-str*`'s last arm
-(`lib/clojure/core.cljc:1447-1456`):
+(`lib/stdcore/clojure/core.fln:1447-1456`):
 
 > The branches above are core's own types, and core knowing its own internals is
 > not a coupling. Anything a LIBRARY adds is a different matter: a
@@ -1529,7 +1529,7 @@ Four corollaries decide the tier:
 | | why it is cheap here |
 |---|---|
 | **`Deref`** | `deref` is a closed switch over `TY_ATOM`/`TY_VOLATILE`/`TY_DELAY` ending in a throw (`kin/atoms.kin`). The protocol replaces the throw. Zero cost for the three real cases; an extern or a library box gets `@x`. This is the one the user asked for and the cleanest in the list. |
-| **`Printable`** | Already built and already this shape (`lib/flint/protocols.cljc`). It is the proof the pattern works, including the two-method split and the `printer-for` door that answers nil rather than throwing. |
+| **`Printable`** | Already built and already this shape (`lib/stdcore/flint/protocols.fln`). It is the proof the pattern works, including the two-method split and the `printer-for` door that answers nil rather than throwing. |
 | **`Closeable`** | `with-open` knows about ports. Externs and drivers both want it. Cold by construction — once per resource. |
 | **`Reduce` / `Reduce-init`** | The best ratio in the survey: one dispatch amortised over the whole collection, and it is what lets a CHAMP or a table reduce internally instead of through a seq. A performance win as well as an extensibility one. |
 | **`Datafiable` / `Navigable`** | Already protocols, already cold, already Clojure's. Nothing to decide. |

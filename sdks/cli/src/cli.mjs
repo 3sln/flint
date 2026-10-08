@@ -22,7 +22,7 @@ function isFile(p) {
 import { instantiate } from '../dist/guest.js';
 import {
   compilerWasm, runtimeWasm, runtimeAotWasm, slots, slotsAot, readerWasm, stdcoreForms,
-  stdextraForms,
+  stdextraForms, depsForms, cliForms,
 } from './artifacts.mjs';
 import { scriptSpec } from './script.mjs';
 import { projectResolver, testRoots } from './resolver.mjs';
@@ -81,7 +81,7 @@ function compileVia({ srcs = null, sources = null, entry, target, optimize = [],
   // doors send the compiler the same features and read user text under them.
   const said = features ?? (stripChecks(optimize, checks) ? PERF_FEATURES : null);
   const nested = said === null || said.includes(':flint/nested');
-  const resolve = projectResolver({ srcs, sources, stdextra: stdextraForms(), nested });
+  const resolve = projectResolver({ srcs, sources, stdextra: stdextraForms(), deps: depsForms(), cli: cliForms(), nested });
   const request = compileRequest({
     entry, target, roots, exports, features: said, aot, shake, meta,
     slots: table ?? slots(), base, name, className,

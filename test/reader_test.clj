@@ -249,9 +249,10 @@
 
 (println "reader: every conditional in flint's own sources selects something")
 (let [srcs (->> (concat (file-seq (clojure.java.io/file "src"))
-                        (file-seq (clojure.java.io/file "lib")))
+                        (file-seq (clojure.java.io/file "lib"))
+                        (file-seq (clojure.java.io/file "cli/lib")))
                 (filter #(.isFile %))
-                (filter #(clojure.string/ends-with? (.getName %) ".cljc")))
+                (filter #(re-find #"\.(cljc|fln)$" (.getName %))))
       empties (for [f srcs
                     :let [forms (try (r/read-all (slurp f) {:features #{:flint}})
                                      (catch Exception _ nil))]
@@ -263,7 +264,7 @@
                     :when (let [tail (drop-while (complement vector?) form)]
                             (and (seq tail) (= 1 (count tail))))]
                 (str (.getPath f) " " (second form)))]
-  (check "no defn in src/ or lib/ has an empty body" (vec empties) []))
+  (check "no defn in src/, lib/ or cli/lib/ has an empty body" (vec empties) []))
 (check "  ... and the check can see one when it is there"
        (let [form (first (r/read-all "(defn f [x] #?(:clj 1))" {:features #{:flint}}))
              tail (drop-while (complement vector?) form)]
@@ -418,8 +419,9 @@
                       "#?(:flint (def a 1)) #?(:clj (def b 2)) (def c 3)"]]
         features [#{:flint :flint/check} #{:flint} #{:clj}]]
   (check (str "  " label " " (pr-str features)) (agrees? src features) true))
-(check "  ... and the whole of lib/ and src/ that holds a conditional, both feature sets"
+(check "  ... and the whole of lib/, cli/lib/ and src/ that holds a conditional, both feature sets"
        (vec (for [f (->> (concat (file-seq (clojure.java.io/file "lib"))
+                                 (file-seq (clojure.java.io/file "cli/lib"))
                                  (file-seq (clojure.java.io/file "src")))
                          (filter #(.isFile %))
                          (filter #(re-find #"\.(cljc|fln)$" (.getName %)))
@@ -463,11 +465,13 @@
 ;;
 ;; The native CLI ships the standard library as `flint.compiler.forms` bytes, and the
 ;; contract is EXACTNESS: decoding gives back the forms `read-deferred` read,
-;; metadata and all, key order included. Every file in `lib/`, compared with
+;; metadata and all, key order included. Every file in `lib/` and `cli/lib/`
+;; -- the four shipped roots `cli/build.rs` embeds this way -- compared with
 ;; `*print-meta*` on, which prints key order as well as content.
 (require '[flint.compiler.forms :as ff])
 (println "reader: flint.compiler.forms decodes what it encoded, metadata and all")
-(let [lib (->> (file-seq (clojure.java.io/file "lib"))
+(let [lib (->> (concat (file-seq (clojure.java.io/file "lib"))
+                       (file-seq (clojure.java.io/file "cli/lib")))
                (filter #(.isFile %))
                (filter #(re-find #"\.(cljc|fln)$" (.getName %))))
       opts (fn [path] {:file path :features :any :tags nil :dialect :portable})
@@ -482,7 +486,7 @@
                      :when (not= (pm [(:opts d) (:conds d) (:forms d)])
                                  (pm [(:opts back) (:conds back) (:forms back)]))]
                  path))]
-  (check (str "  every file in lib/ round-trips (" (count lib) " files)") bad [])
+  (check (str "  every file in lib/ and cli/lib/ round-trips (" (count lib) " files)") bad [])
   ;; Measured here on babashka, whose maps keep insertion order; the guest's
   ;; size is what `cli/build.rs` prints.
   (check (str "  ... and the encoding is smaller than the text (" (second @sizes) " < "

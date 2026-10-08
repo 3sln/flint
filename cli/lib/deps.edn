@@ -1,0 +1,15 @@
+;; `flint.cli`'s own workspace (`DECISIONS.md#four-units`): the command surface
+;; both CLIs share, in its own source root rather than the standard library's.
+;;
+;; Shipped ONLY with the native and npm CLIs. The ESM SDK does not carry it: an
+;; embedder compiling programs has no use for `flint tasks`.
+;;
+;; `.cljc`, NOT `.fln`: the JVM Clojure driver (`bin/flint`) loads `flint.cli`
+;; as Clojure (`bin/check` asserts it).
+;;
+;; NO GRANT. Read 2026-10-08: `flint.cli` requires `clojure.string` and
+;; `flint.deps` and nothing else, and names no `flint.rt` builtin outside the
+;; text of a program it GENERATES (`task`'s wrapper, which is compiled as that
+;; program's own namespace, not this one). It held `flint/flint`'s `[:host]`
+;; only because it lived under `lib/`.
+{:flint/workspace flint/cli}

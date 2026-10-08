@@ -31,9 +31,9 @@
 ;; PINNED VERSION: 18.0.0, the latest published Unicode Standard as of this
 ;; writing (released 2026-09-16) -- chosen because nothing ELSE in this
 ;; codebase constrains the choice. The regex engine's `\w`/`\d`/`\s`
-;; (`lib/flint/regex.cljc`) are hand-coded ASCII ranges, not Unicode property
+;; (`lib/stdcore/flint/regex.fln`) are hand-coded ASCII ranges, not Unicode property
 ;; classes, and `(?i)` / locale-aware matching is not supported at all
-;; (`lib/flint/regex.cljc`'s own doc: "no lookaround, flags or named groups"),
+;; (`lib/stdcore/flint/regex.fln`'s own doc: "no lookaround, flags or named groups"),
 ;; so there is no existing Unicode-version assumption elsewhere to match --
 ;; latest was the only candidate. Fetched from:
 ;;   https://www.unicode.org/Public/18.0.0/ucd/UnicodeData.txt

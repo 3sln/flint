@@ -32,7 +32,7 @@
   everything. Refusing this loop its own reference to `flint.port/send` or
   `flint.wire/read-from` protected nothing that `answer` was not already
   exposed to, and it cost a correctness bug: those two names are ordinary
-  library code (`lib/flint/port.cljc`, `lib/flint/wire.cljc`) and this loop
+  library code (`lib/stdcore/flint/port.fln`, `lib/stdcore/flint/wire.fln`) and this loop
   used to RE-IMPLEMENT their wire codec in ~30 `flint.rt/wire-*` builtins
   instead of calling them -- a second copy that had already drifted, because
   `flint.port/send` asks `flint.protocols/WireMeta` which of a reply's
@@ -43,7 +43,7 @@
   So this loop now does exactly what any other guest code sending and
   receiving on a port does: `(flint.port/send p v)` to answer, and
   `(flint.wire/read-from r)` on `(flint.rt/port-receive-reader p)` to read a
-  call -- the same two calls `lib/flint/port.cljc`'s own `send`/`receive` make.
+  call -- the same two calls `lib/stdcore/flint/port.fln`'s own `send`/`receive` make.
   What is STILL refused, by `check-self-contained!` below, is everything else:
   special forms, this loop's own locals, `flint.rt` builtins, and exactly
   those two vars. No `clojure.core`, no macro, no `:inline` -- a program's own
@@ -230,7 +230,7 @@
 (def allowed-vars
   "The only vars this loop may name, beyond specials, its own locals and
   `flint.rt` builtins: the normal wire codec a call's reply and a call's
-  reading go through, `lib/flint/port.cljc` and `lib/flint/wire.cljc`'s own
+  reading go through, `lib/stdcore/flint/port.fln` and `lib/stdcore/flint/wire.fln`'s own
   entry points. A call thread is not a trust boundary (see the namespace
   docstring), so this is not a safety list -- it is what keeps the loop from
   quietly growing a reference to `clojure.core` or a macro's expansion, which

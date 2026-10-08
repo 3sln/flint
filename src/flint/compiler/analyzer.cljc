@@ -801,7 +801,7 @@
              narrowed))
 
 ;; Core vars whose variadic arity is exactly a left fold of their two-argument
-;; one: `([a b & more] (reduce f (f a b) more))` in lib/clojure/core.cljc. A
+;; one: `([a b & more] (reduce f (f a b) more))` in lib/stdcore/clojure/core.fln. A
 ;; call with three or more arguments is analyzed as the nested two-argument
 ;; calls it is equal to. A LIST, and short, because each entry is a claim about
 ;; a definition elsewhere; `min`/`max` are not here because nothing about their
@@ -1004,7 +1004,7 @@
                  (= [[:arg 0] [:arg 1]] (get-in @(:cc env) [:native-alias (:sym f) 2 :tmpl])))
           ;; `(* 2.0 zr zi)` as `(* (* 2.0 zr) zi)`. The variadic arity of
           ;; `+`, `-` and `*` IS that left fold (`(reduce add (add a b) more)`
-          ;; in lib/clojure/core.cljc), so the value, the evaluation order and
+          ;; in lib/stdcore/clojure/core.fln), so the value, the evaluation order and
           ;; any overflow are the same -- but the nested form reaches the
           ;; two-argument builtin, which has a result type, where the variadic
           ;; call through `reduce` had none. That one missing tag was enough to
@@ -1537,7 +1537,7 @@
     ;; with "letfn* is not implemented", which put a refusal in the analyzer for a
     ;; feature `clojure.core/letfn` already implemented -- so the spelling decided
     ;; whether mutual recursion worked. It is a macro now
-    ;; (`lib/clojure/core.cljc`), and `letfn` expands into it rather than carrying
+    ;; (`lib/stdcore/clojure/core.fln`), and `letfn` expands into it rather than carrying
     ;; a second copy of the volatile-stub trick.
 
     (new set! . monitor-enter monitor-exit deftype* reify* case*)

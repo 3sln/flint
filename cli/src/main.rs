@@ -228,8 +228,8 @@ fn project_deps_edn(dir: &Path) -> (String, PathBuf) {
 /// -- the guest owns the format and a second reader of it is a second thing to
 /// keep true.
 /// `Clone` because one workspace is spliced into several entries -- the
-/// stdlib's `Workspace` is read once and entered under both `clojure/` and
-/// `flint/`, and a project's under every file its root owns
+/// workspace of each shipped root is entered under every file it holds, and a
+/// project's under every file its root owns
 /// (`resolve::Answers` reads the same fields back out of `WsEntry::Source`).
 #[derive(Default, Clone)]
 pub(crate) struct Workspace {
@@ -371,8 +371,8 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
     // pre-read defect ruled in or out, and the EDN spec has nowhere to put
     // bytes.
     let mut files: BTreeMap<String, Body> = BTreeMap::new();
-    for (p, a, b) in STDLIB_INDEX {
-        let body = if as_text { Body::Text(stdlib_text(p)?) } else { Body::Forms(&STDLIB_FORMS[*a..*b]) };
+    for (p, a, b, r, d) in STDLIB_INDEX {
+        let body = if as_text { Body::Text(stdlib_text(p, *r)?) } else { Body::Forms(&STDLIB_FORMS[*a..*b], d) };
         files.insert((*p).to_string(), body);
     }
     // PER ROOT, so each file can be attributed to the workspace that owns it.
@@ -441,19 +441,17 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
     // `bin/flint` read `deps.edn` and refused the same program. The binary
     // users run was the one nothing tested, because every test for the guard
     // and for `:flint/tag-readers` drives `bin/flint`.
-    // `flint.deps`'s own workspace, BEFORE the blanket `flint/` entry below
-    // (first matching prefix wins, same reason the virtual ones go first).
-    // "flint/deps" with no trailing slash, on purpose: it has to match BOTH
-    // `flint/deps.cljc` (the namespace `flint.deps` itself, a FILE beside
-    // this directory, not in it) and `flint/deps/manifest.cljc` and friends
-    // (`DECISIONS.md#flint-deps-is-its-own-workspace`).
-    let deps_ws = read_workspace(DEPS_WORKSPACE_DEPS);
-    if let Some(e) = workspace_entry("flint/deps", &deps_ws, "") {
-        workspaces.push(e);
-    }
-    let stdlib = read_workspace(STDLIB_DEPS);
-    for pre in ["clojure/", "flint/"] {
-        if let Some(e) = workspace_entry(pre, &stdlib, "") {
+    // THE GUEST SOURCE THIS BINARY SHIPS, ONE ENTRY PER FILE, each with the
+    // workspace of the root that holds it (`DECISIONS.md#four-units`): the
+    // standard library's `flint/flint`, `flint/deps`, `flint/cli`. A full path
+    // as the prefix, the way a project's files get theirs below. These used to
+    // be NAMESPACE PREFIXES -- `"flint/deps"` ahead of `"clojure/"` and
+    // `"flint/"` -- which also handed `flint/flint`'s grant to any project file
+    // under `flint/` (the prefix hole `DECISIONS.md#namespaces-over-the-system-port`
+    // records).
+    let roots: Vec<Workspace> = STDLIB_ROOTS.iter().map(|(_, deps)| read_workspace(deps)).collect();
+    for (p, _, _, r, _) in STDLIB_INDEX {
+        if let Some(e) = workspace_entry(p, &roots[*r], "") {
             workspaces.push(e);
         }
     }
@@ -565,7 +563,9 @@ fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
             Body::Text(t) => { w.string(t); }
             // `{:preread bytes}`, which `flint.compiler.resolve/file-answer` takes apart
             // (`DECISIONS.md#stdlib-preread`).
-            Body::Forms(b) => { w.map(1).keyword(None, "preread").bytes(b); }
+            // and THE DIALECT it was read under, said rather than derived from
+            // the path (`DECISIONS.md#four-units`).
+            Body::Forms(b, d) => { w.map(2).keyword(None, "preread").bytes(b).keyword(None, "dialect").keyword(None, d); }
             // Read by the HOST, with the dialect it was read under: the
             // compiler checks both against what it would have read it as.
             Body::Read(b, d) => { w.map(2).keyword(None, "preread").bytes(b).keyword(None, "dialect").keyword(None, d); }
@@ -606,7 +606,7 @@ pub(crate) struct SplitFiles {
 /// with them.
 pub(crate) enum Body {
     Text(String),
-    Forms(&'static [u8]),
+    Forms(&'static [u8], &'static str),
     /// A project file the host read itself (`crate::read`), and its dialect.
     Read(Vec<u8>, &'static str),
 }
@@ -616,7 +616,7 @@ pub(crate) enum Body {
 /// (`DECISIONS.md#stdlib-preread`). Only the test hooks ask: `FLINT_PREREAD=0`,
 /// which reads the library from text to measure what the forms save, and the
 /// EDN spec `FLINT_SPEC_OUT` and `FLINT_CHECK_SPLIT` compare against.
-fn stdlib_text(path: &str) -> Result<String> {
+fn stdlib_text(path: &str, root: usize) -> Result<String> {
     // Relative to the CURRENT DIRECTORY, not `env!("CARGO_MANIFEST_DIR")`. The
     // old version resolved against where this binary was BUILT -- a compile-time
     // `&'static str` literal that `--remap-path-prefix` cannot touch (that
@@ -628,11 +628,12 @@ fn stdlib_text(path: &str) -> Result<String> {
     // actually is for THIS checkout -- the thing this dev-only hook is
     // supposed to measure -- so CWD is the more correct answer, not just the
     // reproducible one.
-    let p = Path::new("lib").join(path);
+    let dir = STDLIB_ROOTS[root].0;
+    let p = Path::new(dir).join(path);
     fs::read_to_string(&p).map_err(|e| anyhow::anyhow!(
         "this binary carries the standard library READ, not as text; reading it as text \
          (FLINT_PREREAD=0, FLINT_SPEC_OUT, FLINT_CHECK_SPLIT) needs the source tree it was \
-         built from, and lib/{path} is not there: {e}"))
+         built from, and {dir}/{path} is not there: {e}"))
 }
 
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,

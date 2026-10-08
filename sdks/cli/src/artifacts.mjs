@@ -50,3 +50,7 @@ export const readerWasm = () => once('reader', () => read('flint-reader.wasm'));
 /// first thing this CLI's resolver consults.
 export const stdcoreForms = () => once('stdcore', () => new Uint8Array(read('stdcore.forms')));
 export const stdextraForms = () => once('stdextra', () => new Uint8Array(read('stdextra.forms')));
+/// `flint.deps` and `flint.cli`, READ (`DECISIONS.md#four-units`): units of
+/// their own, which this CLI's resolver consults after stdextra.
+export const depsForms = () => once('deps', () => new Uint8Array(read('deps.forms')));
+export const cliForms = () => once('cli', () => new Uint8Array(read('cli.forms')));

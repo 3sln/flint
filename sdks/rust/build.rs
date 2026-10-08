@@ -16,6 +16,14 @@ fn main() {
     println!("cargo:rerun-if-changed={}", dist.display());
     println!("cargo:rerun-if-changed={}", root.join("lib").display());
 
+    // The standard library's two roots, `lib/stdcore` and `lib/stdextra` (both
+    // `.fln`, both owned by `lib/deps.edn` one directory up), and `flint.deps`'s,
+    // `lib/deps` (`DECISIONS.md#four-units`). NOT `cli/lib`: `flint.cli` ships
+    // with the two CLIs only. Keys are relative to EACH ROOT, not to `lib/` or
+    // the repo root -- `lib/stdcore/clojure/core.fln` becomes `"clojure/core.fln"`,
+    // the same shape `lib/deps/flint/deps.cljc` becomes `"flint/deps.cljc"` --
+    // so a namespace's key here matches what `flint.compiler.resolve/ns->path`
+    // plus its extension would produce, regardless of which root shipped it.
     let mut entries: Vec<(String, String)> = Vec::new();
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
         let mut names: Vec<_> = fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).collect();
@@ -26,12 +34,14 @@ fn main() {
             let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
             if p.is_dir() {
                 walk(&p, &rel, out);
-            } else if rel.ends_with(".cljc") || rel.ends_with(".clj") {
+            } else if rel.ends_with(".fln") || rel.ends_with(".cljc") || rel.ends_with(".clj") {
                 out.push((rel, fs::read_to_string(&p).unwrap()));
             }
         }
     }
-    walk(&root.join("lib"), "", &mut entries);
+    for shipped_root in ["lib/stdcore", "lib/stdextra", "lib/deps"] {
+        walk(&root.join(shipped_root), "", &mut entries);
+    }
 
     let mut src = String::from("[\n");
     for (path, body) in &entries {

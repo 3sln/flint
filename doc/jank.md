@@ -208,7 +208,7 @@ oversight.
 > **BECAUSE JANK'S TESTS WRITE THE SPECIAL FORM.** `pass-multi-arity.jank` is
 > `(letfn* [a (fn* a ([v] (a v :something)) ([v & args] v))] (a :success))` -- not
 > `letfn`, not `fn`. Twenty of the twenty-one tests under `form/letfn` write
-> `letfn*`, so flint's `letfn` MACRO (`lib/clojure/core.cljc`, since `b7e3d247` on
+> `letfn*`, so flint's `letfn` MACRO (`lib/stdcore/clojure/core.fln`, since `b7e3d247` on
 > 2026-08-22) cannot help them: it is a different name.
 >
 > The one test that writes plain `letfn` is `binding/pass-shadow-outer-scope.jank`,

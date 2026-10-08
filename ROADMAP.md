@@ -96,7 +96,7 @@ by-area view on top of it.
 | String hash unified to one byte-walk across all three tiers (was silently 3 different bases) | done | `doc/goals/README.md` §1 |
 | `clojure.zip`, `clojure.data`, `clojure.datafy` shipped | done | the decision index (now folded into `DECISIONS.md`) item `0p` |
 | Regex delegation to host engines (JS/JVM/CLR `RegExp`/`Pattern`/`Regex`) | abandoned | [`strings-and-matching`](DECISIONS.md#strings-and-matching) §5, explicitly superseded by [`matching-over-ropes`](DECISIONS.md#matching-over-ropes) — stock engines can't consume a rope |
-| `letfn*`, the SPECIAL FORM | **shipped 2026-09-29** as a macro in `lib/clojure/core.cljc`, with `letfn` expanding into it rather than carrying a second copy of the volatile-stub trick. It validates its bindings (a vector, even in count, simple symbols), which the blanket refusal used to do by accident. jank's suite went 193 to 206 of 295 on native and 195 to 208 on the JVM port: +13 `pass-*`, and the 4 `fail-*` tests the refusal had been passing for the wrong reason are refused again for the right one. The one `form/letfn` test still failing is `pass-destructure` -- fn-parameter destructuring, a different gap. What is NOT done is bindings that genuinely exist before their initialisers run; the stub is variadic, so a wrong-arity call is caught one frame in. Previously: not implemented, and it refused by name — but **mutual recursion in `let` works**, which is what this row used to claim was missing. `letfn` is a macro in `lib/clojure/core.cljc` (since `b7e3d247`, 2026-08-22): each name binds to a stub dispatching through a volatile, and the real functions are installed afterwards, which is the price of by-value capture. MEASURED 2026-09-28 — mutually recursive `even2?`/`odd2?` answers, and so does a multi-arity spec calling its sibling (`(f 3)` → 4). `letfn*` written directly still errors. **The 14 jank tests attributed to this are EXACT, re-run 2026-09-28** against jank `0169e88`: twenty of the twenty-one tests under `form/letfn` write `letfn*` and `fn*` directly, so the macro cannot serve them. The one that writes plain `letfn` now passes, and is the `pass-*` count moving 130 to 131 | [`doc/jank.md`](doc/jank.md) |
+| `letfn*`, the SPECIAL FORM | **shipped 2026-09-29** as a macro in `lib/stdcore/clojure/core.fln`, with `letfn` expanding into it rather than carrying a second copy of the volatile-stub trick. It validates its bindings (a vector, even in count, simple symbols), which the blanket refusal used to do by accident. jank's suite went 193 to 206 of 295 on native and 195 to 208 on the JVM port: +13 `pass-*`, and the 4 `fail-*` tests the refusal had been passing for the wrong reason are refused again for the right one. The one `form/letfn` test still failing is `pass-destructure` -- fn-parameter destructuring, a different gap. What is NOT done is bindings that genuinely exist before their initialisers run; the stub is variadic, so a wrong-arity call is caught one frame in. Previously: not implemented, and it refused by name — but **mutual recursion in `let` works**, which is what this row used to claim was missing. `letfn` is a macro in `lib/stdcore/clojure/core.fln` (since `b7e3d247`, 2026-08-22): each name binds to a stub dispatching through a volatile, and the real functions are installed afterwards, which is the price of by-value capture. MEASURED 2026-09-28 — mutually recursive `even2?`/`odd2?` answers, and so does a multi-arity spec calling its sibling (`(f 3)` → 4). `letfn*` written directly still errors. **The 14 jank tests attributed to this are EXACT, re-run 2026-09-28** against jank `0169e88`: twenty of the twenty-one tests under `form/letfn` write `letfn*` and `fn*` directly, so the macro cannot serve them. The one that writes plain `letfn` now passes, and is the `pass-*` count moving 130 to 131 | [`doc/jank.md`](doc/jank.md) |
 | `recur` refused at top level (currently loops forever instead) | open question, deliberately deferred | [`doc/jank.md`](doc/jank.md) — "one test is a poor reason to add a special case" |
 | jank suite, the rest of the failures (re-run 2026-09-29 at `dcf8b860`: native 208/295, jvm 210/295, after `letfn*` (+13) and `case` composite constants (+2), and the `pass-*` failure SETS are identical, 64 names, `comm` empty both ways): 38 are flint's analyser being *more permissive* than jank's (accepts a program jank rejects — duplicate `case` keys, two variadic arities on one `fn`, etc.), 12 fail with no message, 7 are C++ interop tests that leaked into language-test directories and were counted anyway rather than quietly excluded | open question, unranked | [`doc/jank.md`](doc/jank.md) — the 38 are explicitly not "fixed": "a compiler that refuses more is better, but 'refuses more' is a long tail of individually small rules," so each is reported rather than patched. The suite's 514 C++-interop tests (`test/jank/cpp`) are excluded outright as out of scope by design — flint has no host classes at all, so there is nothing to be "close to" there. |
 | Numeric tower (bigint/ratio), sorted collections, transducers, `eval` at runtime, records/types (`deftype`/`defrecord`/`reify`), hierarchies (`derive`/`isa?`), var objects/`with-redefs`, host threads/agents/refs, metadata on fns/numbers/short strings | decided, not started (by design) | `README.md` §Limits, `doc/coverage.md` (`CHANGELOG.md` was cited here and is deleted; its "Known limits" was itself only a pointer to `README.md#limits`, so nothing is lost) |
@@ -293,7 +293,7 @@ shipping nowhere by design.
 | Rule 2 (a dependency declaring a guard must be granted it) | done 2026-09-29 — wired, then found STILL unable to fire through a symbol/string key mismatch, fixed | `system-namespaces-and-deps` — six rows in `bb test/cli.clj`, including the control that a granted dependency resolves |
 | Rule 3 (`flint deps add` writing the grant it found) | **satisfied by rule 2, not built** — the maintainer's call 2026-09-29: it required `deps add` to download, which `flint.deps.resolve` deliberately never does, and rule 2's refusal already puts the exact grant in front of the user | `system-namespaces-and-deps`, rule 3's bullet — revisit if `deps add` ever fetches for its own reasons |
 | `flint.deps.*` (npm, mvn, git — real registries, real fetches) | in progress | `system-namespaces-and-deps` — `flint deps add` built; `bump`/`pin`/`tree`/`why` not |
-| ~~**`flint.deps.mvn` is served but UNWIRED**~~ | **wired.** `lib/flint/deps/resolve.cljc` requires `flint.deps.mvn` (line 36) and its `:mvn` clause calls `mvn/pom` (line 246); the comment there records the state this row described — "with no clause and no comment, while `flint.deps.mvn/pom` sat there". **Proved by:** `bb test/cli.clj` — "a maven jar is fetched and unpacked on the way to a build" and "a maven dependency's own POM is read, and its deps fetched", against local fixtures rather than the network. What is still not read is the parts of maven that are maven — a parent POM, a profile, a version range — and `flint deps` says so itself, which that suite also asserts. This row said UNWIRED until 2026-09-28 | [`one-dependency-walk`](DECISIONS.md#one-dependency-walk) |
+| ~~**`flint.deps.mvn` is served but UNWIRED**~~ | **wired.** `lib/deps/flint/deps/resolve.cljc` requires `flint.deps.mvn` (line 36) and its `:mvn` clause calls `mvn/pom` (line 246); the comment there records the state this row described — "with no clause and no comment, while `flint.deps.mvn/pom` sat there". **Proved by:** `bb test/cli.clj` — "a maven jar is fetched and unpacked on the way to a build" and "a maven dependency's own POM is read, and its deps fetched", against local fixtures rather than the network. What is still not read is the parts of maven that are maven — a parent POM, a profile, a version range — and `flint deps` says so itself, which that suite also asserts. This row said UNWIRED until 2026-09-28 | [`one-dependency-walk`](DECISIONS.md#one-dependency-walk) |
 | **`(snap "name")` — named snapshots from inside a program** | not built, and was RECORDED as built | A per-name ring buffer keeping the latest hit with a count, compiling to nothing in a production build. Two commits (`1c7a061`, `426af38`) whose subjects read as shipping it changed only documentation — zero lines of code. Removed from `DECISIONS.md`; kept here because the idea may still be worth building |
 | Capability delegation on a dependency entry (grants narrow as they descend, never widen) | done | `system-namespaces-and-deps` — "you cannot lend what you do not hold" |
 | Per-workspace policy enforcement bound to the *port*, not a wrapped closure | done | `system-namespaces-and-deps` — the wrapper approach was tried and rejected (crashes through `apply`) |
@@ -314,7 +314,7 @@ built' have shipped", naming virtual namespaces and pods as in, and leaving
 exactly the two things this note said were genuinely open: the load-time
 reference-guard binding (step 9) and the host-facing token half (step 10).
 Spot-checked 2026-09-22 rather than taken on trust — `:virtual` is read by
-`flint.compiler.analyzer`, and `:pod` is a coordinate kind in `lib/flint/deps.cljc`.
+`flint.compiler.analyzer`, and `:pod` is a coordinate kind in `lib/deps/flint/deps.cljc`.
 
 Worth noticing as a shape rather than a one-off: the fix here was to correct
 the banner, and a note explaining which of two contradicting records to
@@ -434,7 +434,7 @@ other way round in the one place it matters: `bin/flint` does the fetching
 itself, in babashka, one entry at a time.
 
 The good news is that the interface already works this way, and the precedent
-is not one case but two. `fetch-plan` in `lib/flint/deps.cljc` says it outright
+is not one case but two. `fetch-plan` in `lib/deps/flint/deps.cljc` says it outright
 — "the guest decides WHAT to fetch and where it goes, which is pure and
 testable, and the host runs `git`" — and it is already iterative for the reason
 that matters: a dependency's own manifest cannot be read until the thing is on
@@ -630,7 +630,7 @@ and a project CLI — the same surface, with the wasm runner as the possible lon
 exception.
 
 The mechanism: **the driver and glue are flint code, compiled to LLVM IR and
-linked into the native binary.** `lib/flint/cli.cljc` is already the project
+linked into the native binary.** `cli/lib/flint/cli.cljc` is already the project
 surface as flint code, which is why `bin/flint` can be thin over it; the native
 binary reimplements a subset in Rust instead of compiling the same source. That
 is the duplication, and the LLVM backend is the way out of it rather than a
@@ -669,7 +669,7 @@ and source collection have been drifting; there is nothing to keep in step.
 - [x] **First:** `:to :llvm` — emit a linkable native artifact. **Done**; the
       linking is the caller's `clang`, which is what the mirror needs, since the
       glue is linked in flint's OWN build and not in a user's `flint compile`
-- [ ] Then compile `lib/flint/cli.cljc` and its glue, link into the native
+- [ ] Then compile `cli/lib/flint/cli.cljc` and its glue, link into the native
       binary, and retire the Rust reimplementations of `build`, `check`,
       `fetch`, `inspect`, `paths`, `targets`, `task`, `tasks`. **Unblocked and
       not started.** It retires eight commands, so it is a decision rather than
@@ -1009,7 +1009,7 @@ things that are code, not record:
       and this is the harness that was recommended earlier this session as the
       right instrument for the native-versus-wasm question
 - [ ] **Capability delegation on dependency entries is dead code.**
-      `lending-errors` (`lib/flint/deps/resolve.cljc`) implements the rules and
+      `lending-errors` (`lib/deps/flint/deps/resolve.cljc`) implements the rules and
       **has no caller anywhere in the tree**. Probed: a project holding nothing
       that writes `:flint/capabilities-grant [:host]` on a dependency entry —
       the mint-authority-from-nothing case rule 1 exists to refuse — is not
@@ -1203,11 +1203,15 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       `topo-order` places it before its users and the namespace is collected at
       all — nothing else would pull it in
 - [x] Audit `lib/`'s 33 namespaces for which are genuinely flint-only.
-      **NONE of them are**, by the tag rule: `lib/flint/table.cljc` does not
+      **NONE of them are**, by the tag rule: `lib/stdextra/flint/table.fln` does not
       use `#flint/table`, it prints and reads one — all five occurrences are
       comments, a docstring and two `str` literals. The earlier claim was a
       grep, and a grep cannot tell a tag from the text of a tag
-- [x] **The renames themselves: RECOMMENDED AGAINST, 2026-09-12.** Measured,
+- [x] **The renames themselves: RECOMMENDED AGAINST, 2026-09-12** --
+      *superseded 2026-10-08: the maintainer decided the whole standard library
+      moves to `.fln` (`DECISIONS.md#four-units`); the four files the JVM
+      driver loads moved OUT of the standard library instead, so they stay
+      `.cljc`.* Measured,
       not judged: babashka loads exactly FOUR namespaces out of `lib/` —
       `flint.cli`, `flint.deps`, `flint.deps.manifest`, `flint.deps.registry`.
       Those cannot become `.fln`, because babashka cannot read one, and the
@@ -1222,7 +1226,7 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
 
       Whoever revisits it: a mechanical rename is a trap. The grep that
       suggests which files are flint-only had a 2-of-2 false-positive rate on
-      spot-checks, and `lib/flint/cli.cljc`'s single `flint.rt/` hit is inside
+      spot-checks, and `cli/lib/flint/cli.cljc`'s single `flint.rt/` hit is inside
       a string it EMITS as generated source.
 - [ ] **The SEMANTIC half is still open, and it answers differently.** "No
       flint-only tags" is not "would mean the same under Clojure". Most of
@@ -1234,7 +1238,7 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       Two cautions before anyone acts on that. **The grep is a starting point
       and never a finding**: two of two spot-checks were false positives —
       `table.cljc`'s hits are comments and `str` literals, and
-      `lib/flint/cli.cljc`'s single `flint.rt/` sits inside a string it EMITS
+      `cli/lib/flint/cli.cljc`'s single `flint.rt/` sits inside a string it EMITS
       as generated source, so that namespace is portable after all.
 
       **And the extension is load-bearing.** `bin/flint` loads `flint.cli`,
@@ -1248,6 +1252,31 @@ Recorded 2026-09-11. Full spec at `DECISIONS.md#dialects-and-preludes`.
       running the enforcement. `test/sysns.clj`'s went green while refused,
       because its assertion was `includes? "3"` and the read error ends
       `(app.cljc:2:32)`
+
+### Four units, and the standard library's layout (branch `restructure`)
+
+Decided by the maintainer 2026-10-08. Full record at `DECISIONS.md#four-units`.
+
+- [x] Four units, four workspaces, own source roots: `lib/stdcore/` +
+      `lib/stdextra/` (`flint/flint`, `.fln`), `src/` (`flint/compiler`, no
+      grant), `cli/lib/` (`flint/cli`), `lib/deps/` (`flint/deps`). Ownership
+      by containment at every door; no namespace-prefix tables left
+- [x] Separate blobs: `dist/{stdcore,stdextra,deps,cli}.forms`; `flint.cli`
+      only in the two CLIs; `deps()` an optional ESM entry (`@3sln/flint/deps`)
+- [x] Every embedding carries the dialect explicitly (`cli/build.rs` reads
+      with the kin reader, no longer through the compiler's `preread` mode)
+- [x] stdcore is a directory, and `bin/build-stdlib-forms` fails when the
+      compiler's own answer disagrees with it
+- [x] Compiler namespaces under `flint.compiler.*` (`flint.project` ->
+      `flint.compiler.resolve`, `flint.compiler` -> `flint.compiler.core`)
+- [ ] Compiler internals `^:internal`, and a guest naming one refused
+- [ ] `src/flint/compiler/reader.cljc` deleted
+- [ ] `:refer-clojure :exclude`/`:only` honoured; each namespace's prelude is
+      its implicit require edge; `clojure.core` no longer a root
+- [ ] `defalias`, `.fln`-only; `flint.core.impl`; stdcore shrunk
+- [ ] The Rust SDK's `resolve` hook cannot report a `.fln` source (labels
+      every embedder-resolved namespace `.cljc`); needs the step-5 signature
+      change
 
 ### Standalone scripts (built, awaiting sign-off; fetching not wired)
 
@@ -1516,8 +1545,8 @@ only, while user dependencies resolve against the community registry.
   the FETCH for a git-hosted pod is the git downloader, which the two-axis
   split above already handles.
 
-| Transitive resolution, EVERY dependency kind | **done 2026-09-11** — one walk, every kind | [`one-dependency-walk`](DECISIONS.md#one-dependency-walk). `lib/flint/deps/manifest.cljc` reads `deps.edn`, `package.json`, `pom.xml` and a pod manifest in one shape; `flint.deps/fetch-plan` consumes all of them and `flint.deps.resolve/deps-of` reads the same POM reader, so the three mechanisms are one. Maven's transitives come off the POM inside the jar, which needs no second request. Two bugs fell out: `:local/root` never worked (it was probed for a fetch stamp nothing writes), and `flint deps pin` wrote `{}` for `:local` and `:pod` — a coordinate of no kind — which was invisible only because the fetch walk did not read `:flint/overrides` at all. It does now |
-| ~~Transitive resolution for Maven~~ (superseded by the row above) | **built 2026-09-11** | `deps-of` (`lib/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
+| Transitive resolution, EVERY dependency kind | **done 2026-09-11** — one walk, every kind | [`one-dependency-walk`](DECISIONS.md#one-dependency-walk). `lib/deps/flint/deps/manifest.cljc` reads `deps.edn`, `package.json`, `pom.xml` and a pod manifest in one shape; `flint.deps/fetch-plan` consumes all of them and `flint.deps.resolve/deps-of` reads the same POM reader, so the three mechanisms are one. Maven's transitives come off the POM inside the jar, which needs no second request. Two bugs fell out: `:local/root` never worked (it was probed for a fetch stamp nothing writes), and `flint deps pin` wrote `{}` for `:local` and `:pod` — a coordinate of no kind — which was invisible only because the fetch walk did not read `:flint/overrides` at all. It does now |
+| ~~Transitive resolution for Maven~~ (superseded by the row above) | **built 2026-09-11** | `deps-of` (`lib/deps/flint/deps/resolve.cljc`) returns real transitives for `:npm` from its manifest; `:mvn` falls through to `{}` with no clause and no comment. `flint.deps.mvn` already serves `pom` with real fetches and caching and has never been called. The cancellation recorded under `cli` was **revoked 2026-09-11**: it measured a benefit against a standard library that was missing `spec.alpha`/`zip`/`data`/`datafy`, which were implemented right afterwards |
 | `deps.edn` support: git/npm/maven at exact versions | done | `cli` — **maven's transitive resolution was explicitly cancelled, and that is now revoked**, on a measured survey (8.9% of a 135-namespace Clojars sample compiles cleanly on flint; transitive resolution would fix ~2 of 135) |
 | `flint build`/`tasks`/`task`/`deps`/`fetch`/`paths`/`targets` (babashka CLI) | done — and `fetch` now drives the fixpoint to a settle rather than one round, with the round run concurrently | `cli`, `one-dependency-walk` |
 | Capability injection on the CLI (`:with [...]`) | done | `cli`, `workspace-capabilities` |

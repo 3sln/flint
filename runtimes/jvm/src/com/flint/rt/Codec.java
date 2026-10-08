@@ -37,7 +37,7 @@ import java.nio.charset.StandardCharsets;
 /// is no longer true here. `Conc.java` does not reference `Codec` at all --
 /// zero occurrences -- and `hostDeliver` queues the host's bytes by LENGTH,
 /// with back-pressure, without decoding them. The codec that runs is
-/// `lib/flint/wire.cljc`, compiled into the image: guest code over runtime
+/// `lib/stdcore/flint/wire.fln`, compiled into the image: guest code over runtime
 /// primitives (`DECISIONS.md#the-codec-is-guest-code`).
 ///
 /// **"there is no builtin that encodes and none that decodes"** is false.

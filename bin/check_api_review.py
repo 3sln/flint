@@ -44,15 +44,23 @@ NS_HEAD = r'\(ns\s+(?:\^\S+\s+)*'
 
 
 def namespaces():
-    """Every `lib/` namespace, by the name its own `ns` form gives."""
+    """Every guest-shipped namespace, by the name its own `ns` form gives.
+
+    Four shipped roots now (AGENTS.md's restructure note): `lib/stdcore`,
+    `lib/stdextra` and `lib/deps` all sit under `lib/`, and `cli/lib` is its
+    own root outside it. `.fln` is the stdlib's own extension
+    (`DECISIONS.md#dialects-and-preludes`); `.cljc` is still used by
+    `lib/deps` and `cli/lib`.
+    """
     out = set()
-    for base, _, files in os.walk(os.path.join(ROOT, 'lib')):
-        for f in files:
-            if f.endswith('.cljc'):
-                first = read(os.path.relpath(os.path.join(base, f), ROOT)).split('\n', 1)[0]
-                m = re.match(NS_HEAD + r'([a-z][\w.-]*)', first)
-                if m:
-                    out.add(m.group(1))
+    for shipped_root in (os.path.join(ROOT, 'lib'), os.path.join(ROOT, 'cli', 'lib')):
+        for base, _, files in os.walk(shipped_root):
+            for f in files:
+                if f.endswith('.cljc') or f.endswith('.fln'):
+                    first = read(os.path.relpath(os.path.join(base, f), ROOT)).split('\n', 1)[0]
+                    m = re.match(NS_HEAD + r'([a-z][\w.-]*)', first)
+                    if m:
+                        out.add(m.group(1))
     return out
 
 
@@ -122,21 +130,27 @@ PUBLIC_EV = re.compile(
 
 
 def lib_requirers(ns):
-    """`lib/` namespaces that `:require` `ns`, not counting its own file.
+    """Shipped namespaces that `:require` `ns`, not counting its own file.
+
+    Walks the same four roots `namespaces()` does (`lib/stdcore`,
+    `lib/stdextra`, `lib/deps` under `lib/`, plus `cli/lib`), `.fln` and
+    `.cljc` alike -- `flint.cli` used to live under `lib/` itself and counted
+    here; moved to its own root, it still should.
 
     The delimiter after the name is what keeps `flint.deps` from counting
     `[flint.deps.resolve ...]`: a prefix is not a requirer.
     """
     n = 0
-    for base, _, files in os.walk(os.path.join(ROOT, 'lib')):
-        for f in files:
-            if not f.endswith('.cljc'):
-                continue
-            txt = read(os.path.relpath(os.path.join(base, f), ROOT))
-            if re.match(NS_HEAD + re.escape(ns) + r'[\s)]', txt):
-                continue
-            if re.search(r'\[' + re.escape(ns) + r'[\s:\]]', txt):
-                n += 1
+    for shipped_root in (os.path.join(ROOT, 'lib'), os.path.join(ROOT, 'cli', 'lib')):
+        for base, _, files in os.walk(shipped_root):
+            for f in files:
+                if not (f.endswith('.cljc') or f.endswith('.fln')):
+                    continue
+                txt = read(os.path.relpath(os.path.join(base, f), ROOT))
+                if re.match(NS_HEAD + re.escape(ns) + r'[\s)]', txt):
+                    continue
+                if re.search(r'\[' + re.escape(ns) + r'[\s:\]]', txt):
+                    n += 1
     return n
 
 
@@ -268,7 +282,7 @@ def main():
     # THE "Is this public?" EVIDENCE, for the two numbers that have a definition.
     # A wrong one is worse than a missing one: `flint.deps` read "1 other" and
     # concluded "required only by other `flint.deps.*` namespaces", when
-    # `lib/flint/cli.cljc` requires it too -- so the row answered its own
+    # `cli/lib/flint/cli.cljc` requires it too -- so the row answered its own
     # question the wrong way. The TEST-PROGRAM count is left alone: nothing in
     # the tree defines what a "compiled test program" is countably, so checking
     # it would only pin whatever this script decided it meant.

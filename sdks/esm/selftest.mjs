@@ -8,6 +8,7 @@ import {
   stdcoreNamespaces, Driver, Inline, ThreadPool,
 } from './dist/flint.js';
 import { stdextra } from './dist/stdextra.js';
+import { deps } from './dist/deps.js';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -638,6 +639,31 @@ for (const checks of [true, false]) {
   ok('stdcore.forms bytes are inlined in dist/flint.js, which imports it unconditionally',
      flintJsText.includes(stdcoreSlice));
   ok('and NOT in dist/stdextra.js', !stdextraJsText.includes(stdcoreSlice));
+}
+
+// --- flint.cli ships with the CLIs only; flint.deps is optional ---------------
+//
+// `DECISIONS.md#four-units`: `flint.cli` is the two CLIs' command surface and is
+// in neither ESM bundle; `flint.deps` is its own unit, offered as `deps()` from
+// `@3sln/flint/deps`. The control for the absence: the SAME program compiles
+// once `deps()` is in the chain, so the refusal is about what was composed and
+// not about the program.
+{
+  const bundles = ['flint.js', 'stdextra.js', 'deps.js']
+    .map((f) => readFileSync(new URL(`./dist/${f}`, import.meta.url), 'utf8'));
+  ok('no ESM bundle carries flint.cli', bundles.every((t) => !t.includes('flint.cli/run')),
+     'found the text flint.cli/run in a bundle');
+  ok('stdextra() does not answer flint.cli or flint.deps',
+     !stdextra().has('flint.cli') && !stdextra().has('flint.deps'));
+  const files = { 'depsapp.cljc': '(ns depsapp (:require [flint.deps :as d])) (defn main [_] (fn? d/coord-type))' };
+  let missing = null;
+  try { await compiler.compile({ resolve: chain(stdextra(), fromMap(files)), fn: 'depsapp/main' }); }
+  catch (e) { missing = e; }
+  ok('without deps() a program requiring flint.deps reports it missing',
+     missing && /flint\.deps/.test(missing.message), String(missing));
+  const sb = await (await compiler.compile({ resolve: chain(stdextra(), deps(), fromMap(files)),
+                                             fn: 'depsapp/main' })).sandbox();
+  eq('and with deps() in the chain the same program compiles and runs', await sb.call('depsapp/main', [null]), true);
 }
 
 // --- a resolver that throws -------------------------------------------------

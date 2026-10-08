@@ -81,14 +81,26 @@
 (def slots (into {} (map (fn [[k v]] [(str k) v])
                          (edn/read-string (str/replace (slurp "dist/slots.json")
                                                        #"\"([^\"]+)\":" "\"$1\" ")))))
-(def lib (into {} (for [f (file-seq (io/file "lib")) :when (.isFile f)
-                        :let [p (subs (str f) 4)]] [p (slurp f)])))
+;; The four shipped roots (AGENTS.md's restructure note) merged into one map,
+;; keyed by the ns-relative path within its own root -- `lib/stdcore/clojure/core.fln`
+;; becomes `"clojure/core.fln"`, same as `lib/deps/flint/deps.cljc` becomes
+;; `"flint/deps.cljc"` -- so `find-src` below can look a namespace up without
+;; knowing which root it shipped from.
+(def stdlib-roots ["lib/stdcore" "lib/stdextra" "lib/deps" "cli/lib"])
+(def lib (into {} (for [root stdlib-roots
+                        f (file-seq (io/file root)) :when (.isFile f)
+                        :let [p (subs (str f) (inc (count root)))]]
+                    [p (slurp f)])))
 
 (defn build-image [src entry]
   (let [all (merge lib src)
+        ;; Most specific extension first (`DECISIONS.md#dialects-and-preludes`):
+        ;; a namespace may have both a `.fln` and a `.cljc`.
         find-src (fn [n] (let [b (project/ns->path n)]
-                           (when-let [s (get all (str b ".cljc"))]
-                             {:src s :file (str b ".cljc")})))
+                           (some (fn [ext]
+                                   (when-let [s (get all (str b ext))]
+                                     {:src s :file (str b ext)}))
+                                 [".fln" ".cljc" ".clj"])))
         {:keys [sources order]} (project/resolve-project find-src (symbol (namespace entry)) #{:flint})
         r (compiler/compile-image
            {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e)) :file (:file (val e))}]) sources))

@@ -181,6 +181,8 @@ guarantee is new.
 
 **Is this public?** Required by 0 compiled test program(s), 0 other `lib` namespace(s), named 0 time(s) in README. Nothing requires it. It is the CLI's own logic, driven by `bin/flint`; a program requiring it would be odd.
 
+**MOVED 2026-10-08 (`DECISIONS.md#four-units`): out of the standard library.** Its own source root `cli/lib/`, its own workspace `flint/cli` (no grant -- read: it requires `clojure.string` and `flint.deps` and names no builtin), and its own blob `dist/cli.forms`. Shipped with the native CLI (embedded by `cli/build.rs`) and the npm CLI (`sdks/cli` copies `cli.forms` and chains it after stdextra and deps) and with NOTHING ELSE: not in either ESM bundle (`sdks/esm/selftest.mjs` asserts it), not in the Rust SDK's embedded library. Still `.cljc`, because the JVM driver loads it as Clojure. A reviewer should ask whether it should be published at all, now that nothing but the two CLIs carries it.
+
 **Change requests:** _none recorded_
 
 ## flint.core
@@ -229,9 +231,11 @@ guarantee is new.
 
 29 public vars. **UNMANIFESTED** — not in `doc/manifest.edn`, so nothing asserts it is callable from a compiled module. `deps.edn`, the parts of it flint can honour (`DECISIONS.md#cli`).
 
-**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. **This row read "1 other" and "Required only by other `flint.deps.*` namespaces" until 2026-09-26, and both were wrong.** The two requirers are `lib/flint/deps/resolve.cljc` — which is the `flint.deps.*` family — and `lib/flint/cli.cljc`, which is not: the project surface `bin/flint` is thin over depends on this namespace. "Used only within its own family" reads as internal and was the conclusion a reviewer would have acted on; "the CLI's own surface requires it" is a different answer to the same question. Tooling for reading `deps.edn`.
+**Is this public?** Required by 0 compiled test program(s), 2 other `lib` namespace(s), named 0 time(s) in README. **This row read "1 other" and "Required only by other `flint.deps.*` namespaces" until 2026-09-26, and both were wrong.** The two requirers are `lib/deps/flint/deps/resolve.cljc` — which is the `flint.deps.*` family — and `cli/lib/flint/cli.cljc`, which is not: the project surface `bin/flint` is thin over depends on this namespace. "Used only within its own family" reads as internal and was the conclusion a reviewer would have acted on; "the CLI's own surface requires it" is a different answer to the same question. Tooling for reading `deps.edn`.
 
 **Change requests:** **Stays public.** `flint.cli` requires it directly from a different workspace (`flint/flint`, below), which is exactly the case `DECISIONS.md#namespace-is-workspace-local`'s candidate list already excluded it from marking `^:internal` for. 2026-10-06: it (and its three siblings) now have their OWN workspace, `flint/deps`, separate from the stdlib's blanket `flint/flint` (`DECISIONS.md#flint-deps-is-its-own-workspace`) — a different mechanism from `^:internal`, and one that does not restrict who may call a PUBLIC var in it.
+
+**MOVED 2026-10-08 (`DECISIONS.md#four-units`): its own source root.** `flint.deps` and its three siblings now live in `lib/deps/` (still `.cljc`, the JVM driver loads them), owned by `lib/deps/deps.edn` by containment rather than by the `flint/deps` namespace prefix every door used to apply by hand. Not part of the standard library: its own blob `dist/deps.forms`, shipped with both CLIs, and an OPTIONAL building block in the ESM SDK, `deps()` from `@3sln/flint/deps` (see `sdks/esm`).
 
 ## flint.deps.manifest
 
@@ -743,6 +747,16 @@ this review, so there is nothing left for the reviewer to weigh here.
 The portable ESM SDK, published as `@3sln/flint`. `package.json` exports TWO
 entries since 2026-10-07 -- `./dist/flint.js` and `./stdextra` (`./dist/stdextra.js`)
 -- so the surface is exactly what those two bundles export.
+
+**CHANGED 2026-10-08 (`DECISIONS.md#four-units`): a THIRD entry, `./deps`
+(`./dist/deps.js`), exporting one name, `deps()`** -- `flint.deps` and its three
+siblings as an optional resolver building block, the same shape as `stdextra()`,
+in its own bundle so a host that never imports it never loads the blob. And
+`stdextra()` no longer answers `flint.cli` or `flint.deps*`: `flint.cli` is in
+no ESM bundle at all (it ships with the two CLIs only), and `flint.deps` is
+behind `deps()`. A host that composed `stdextra()` and required `flint.deps`
+now gets it `:missing` unless it adds `deps()` -- a breaking change to what
+`stdextra()` answers, recorded here for the review.
 
 **ENUMERATED 2026-09-26 at `44402457`** from the bundle's own export statement,
 fourteen names:

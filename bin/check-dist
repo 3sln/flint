@@ -40,10 +40,13 @@
 ;; same gate rebuilt `dist/` halfway through. Swapping a pre-`split`
 ;; `flintc.bytecode` into a fresh tree reproduces all four exactly.
 ;;
-;; So `bin/build-dist` stamps the digest of `src/` and `lib/` it compiled, and
-;; this compares it with the tree. ONE DIGEST FUNCTION, here; `build-dist`
-;; calls `--digest` rather than restating it. Every file under both roots counts,
-;; tracked or not, because the build reads the directory and not git.
+;; So `bin/build-dist` stamps the digest of `src/`, `lib/` and `cli/lib/` it
+;; compiled, and this compares it with the tree. ONE DIGEST FUNCTION, here;
+;; `build-dist` calls `--digest` rather than restating it. Every file under
+;; all three roots counts, tracked or not, because the build reads the
+;; directory and not git. `cli/lib` is its own root now (AGENTS.md's
+;; restructure note) -- `lib/**` still covers `lib/stdcore`, `lib/stdextra`
+;; and `lib/deps`, which sit under `lib/`.
 (def stamp
   "Overridable so `test/check-dist.clj` can hand it a wrong stamp without
   touching `dist/`."
@@ -51,7 +54,7 @@
 
 (defn digest []
   (let [md (java.security.MessageDigest/getInstance "SHA-256")
-        files (->> ["src" "lib"]
+        files (->> ["src" "lib" "cli/lib"]
                    (mapcat #(fs/glob % "**"))
                    (filter fs/regular-file?)
                    (map str)

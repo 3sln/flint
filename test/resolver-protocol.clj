@@ -25,10 +25,14 @@
          '[babashka.classpath :as cp]
          '[babashka.process :as p]
          '[cheshire.core :as json]
-         '[clojure.string :as str])
+         '[clojure.string :as str]
+         '[clojure.edn :as edn])
 
 (def root (str (fs/parent (fs/parent (fs/absolutize *file*)))))
-(cp/add-classpath (str root "/src:" root "/lib"))
+;; `lib` no longer holds Clojure the bb classloader can read -- its `.fln`
+;; files are flint's own dialect (`DECISIONS.md#dialects-and-preludes`) -- so
+;; only `src`, the compiler's own sources, goes on the classpath.
+(cp/add-classpath (str root "/src"))
 (require '[flint.compiler.resolve :as project]
          '[flint.compiler.reader :as reader]
          '[flint.compiler.selfhost :as selfhost])
@@ -38,12 +42,31 @@
   (if ok (println "  ok  " label)
       (do (swap! fails inc) (println "  FAIL" label))))
 
-(def stdlib-dir (str root "/lib"))
+;; The stdlib used to be one directory, `lib`, answering with one hardcoded
+;; workspace. It is now four shipped roots (`lib/stdcore`, `lib/stdextra`,
+;; `lib/deps`, `cli/lib`), each owned by a `deps.edn` -- its own if the root
+;; has one, else the one a directory up (`DECISIONS.md#four-units`). Read the
+;; owning file for `:flint/workspace`/`:flint/capabilities-grant` rather than
+;; restating them, so this test cannot drift from what the roots declare.
+(defn- owning-deps-edn [dir]
+  (let [own (fs/file dir "deps.edn")]
+    (if (fs/exists? own) own (fs/file (str (fs/parent dir)) "deps.edn"))))
+
+(defn- root-info [dir]
+  (let [d (edn/read-string (slurp (str (owning-deps-edn dir))))]
+    [dir {:workspace (:flint/workspace d)
+          :grants (vec (:flint/capabilities-grant d))}]))
+
+(def shipped-roots
+  (into {} (map root-info) (map #(str root "/" %)
+                                 ["lib/stdcore" "lib/stdextra" "lib/deps" "cli/lib"])))
+
+(def stdlib-dirs (vec (keys shipped-roots)))
 
 (defn read-answer
   "Namespace `n` from the first of `dirs` that has it, READ -- the protocol
-  speaks forms. The standard library answers with its own workspace and grants
-  (`lib/deps.edn`), as every door's resolver does; anything else is anonymous."
+  speaks forms. A shipped root answers with its owning workspace and grants,
+  as every door's resolver does; anything else is anonymous."
   [dirs features n]
   (first
    (for [d dirs
@@ -51,9 +74,9 @@
          :let [rel (str (project/ns->path n) ext)
                f (fs/file d rel)]
          :when (fs/exists? f)]
-     (let [lib? (= d stdlib-dir)
+     (let [info (get shipped-roots d)
            s (cond-> {:file rel}
-               lib? (assoc :workspace 'flint/flint :grants [:host :vars]))]
+               info (assoc :workspace (:workspace info) :grants (:grants info)))]
        (assoc s :forms (reader/read-all (slurp f) (project/read-options s features)))))))
 
 (defn dir-resolver
@@ -80,7 +103,7 @@
       asked (atom [])
       t0 (System/currentTimeMillis)
       r (selfhost/compile-with {:entry (symbol prog "main") :target :llvm :slots slots}
-                               (dir-resolver [stdlib-dir (str root "/corpus")] features asked))
+                               (dir-resolver (conj stdlib-dirs (str root "/corpus")) features asked))
       ms (- (System/currentTimeMillis) t0)
       out (str work "/" prog ".ll")
       _ (p/shell {:dir root :out :string :err :string}
@@ -101,7 +124,7 @@
       app "(ns app\n  (:require [clojure.string :as s]\n            [nope.gone :as g]))\n(defn main [_] (g/f))\n"
       _ (spit (str work "/app.cljc") app)
       run (fn [] (selfhost/compile-with {:entry 'app/main :target :image :builtins (set (keys slots))}
-                                        (dir-resolver [stdlib-dir work] reader/default-features (atom []))))
+                                        (dir-resolver (conj stdlib-dirs work) reader/default-features (atom []))))
       r (run)
       e (first (:errors r))]
   (check-that "a namespace nobody answers is :missing, positioned at its require (app.cljc:3:13)"
@@ -141,7 +164,7 @@
       asked (atom [])
       compile1 (fn [entry]
                  (selfhost/compile-with {:entry entry :target :image :builtins (set (keys slots))}
-                                        (dir-resolver [stdlib-dir work] reader/default-features asked)))
+                                        (dir-resolver (conj stdlib-dirs work) reader/default-features asked)))
       ok (compile1 'ab-cd/main)
       bug (compile1 'ab_cd/main)
       lit (compile1 'under_score/main)

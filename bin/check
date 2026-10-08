@@ -88,10 +88,15 @@ done
 # `.fln` while "does anything outside flint read it?" says `.cljc`. The
 # second question is the one that governs, and this is the only place that
 # says so.
-for f in flint/cli flint/deps flint/deps/manifest flint/deps/registry; do
-  [ -f "lib/$f.cljc" ] || fail "lib/$f.cljc is gone -- the bootstrap driver loads it, so it cannot be .fln"
+for f in cli/lib/flint/cli lib/deps/flint/deps lib/deps/flint/deps/manifest lib/deps/flint/deps/registry; do
+  [ -f "$f.cljc" ] || fail "$f.cljc is gone -- the bootstrap driver loads it, so it cannot be .fln"
 done
-echo "  ok   the four lib namespaces the bootstrap driver loads are still .cljc"
+echo "  ok   the four namespaces the bootstrap driver loads are still .cljc"
+# AND THE STANDARD LIBRARY IS ALL .fln (`DECISIONS.md#four-units`): one rule
+# for every file under its two roots, so nobody has to decide per file.
+stray=$(find lib/stdcore lib/stdextra -type f ! -name '*.fln' | head -3)
+[ -z "$stray" ] || fail "not .fln under the standard library's roots: $stray"
+echo "  ok   every standard-library file is .fln"
 
 # The API review list cannot fall behind the code: a namespace added with no
 # section would be silently unreviewed while the list looked complete.

@@ -22,7 +22,7 @@ import com.flint.rt.Val;
 /// implementations of one fact and a hazard `DECISIONS.md#one-dependency-walk`
 /// records by name. A fifth would make it worse, so this stops where the
 /// duplication would start. Sharing spec construction is its own change: compile
-/// `lib/flint/cli.cljc` once and let every door call it, which `ROADMAP.md`
+/// `cli/lib/flint/cli.cljc` once and let every door call it, which `ROADMAP.md`
 /// carries as the item after `:to :llvm`.
 ///
 /// So the mirror is HALF complete on purpose, and that is the honest half.

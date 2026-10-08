@@ -464,7 +464,7 @@ fn guest_code_survives_collections_staged_by_another_thread() {
 /// `swap!` under real contention, on the native runtime.
 ///
 /// The JVM port surfaced this: flint's `swap!` is `(reset! a (f (deref a)))`
-/// in `lib/clojure/core.cljc` -- a plain read-modify-write with no atomicity.
+/// in `lib/stdcore/clojure/core.fln` -- a plain read-modify-write with no atomicity.
 /// It loses updates whenever two threads are inside it at once, and no part of
 /// that crashes: the counter is simply smaller than it should be.
 ///

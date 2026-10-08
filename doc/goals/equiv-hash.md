@@ -11,8 +11,8 @@ returns nothing.
 
 **`flint.protocols` no longer holds `Printable` and nothing else.** It holds
 FOUR: `Printable`, `Meta`, `WithMeta` and `WireMeta`, counted by the
-`(def X__impls ...)` atoms each one is paired with in `lib/flint/protocols.cljc`
-(`lib/flint/protocols/io.cljc` declares none). That does not weaken the argument
+`(def X__impls ...)` atoms each one is paired with in `lib/stdcore/flint/protocols.fln`
+(`lib/stdextra/flint/protocols/io.fln` declares none). That does not weaken the argument
 below — none of the four is dispatched from inside the runtime's recursion,
 which is the whole problem §1 states — but "nothing else" was the sentence a
 reader would have taken for a survey.
@@ -20,7 +20,7 @@ reader would have taken for a survey.
 **And `=` is not one line.** `hash` is; `=` has three arities and the variadic
 one loops. What is true, and is what §1 rests on, is that EVERY arity goes
 straight into the runtime with no protocol dispatch anywhere
-(`lib/clojure/core.cljc:29` and `:46`):
+(`lib/stdcore/clojure/core.fln:29` and `:46`):
 
 ```clojure
 (defn =

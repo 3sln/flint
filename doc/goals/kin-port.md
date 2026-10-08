@@ -5418,7 +5418,7 @@ errand; each was read to find out WHY, and the answers differ enough to be
 worth writing down rather than repeating the reading.
 
 **1. Remove the `{:exec ...}` arm.** It is produced in exactly one place --
-`lib/flint/cli.cljc:335`, the `flint task` command -- and consumed by each host
+`cli/lib/flint/cli.cljc:335`, the `flint task` command -- and consumed by each host
 (`bin/flint:861`, `cli/src/sys.rs:840`, and the node CLI). The replacement
 capability, running flint from flint over the port protocol, is shipped and
 measured byte-for-byte on both front ends.
@@ -8158,7 +8158,7 @@ is the ports as they stood.
 and `Conc.State` are **dead in both ports** -- nothing calls either -- and they
 disagree with the live `flint/thread-state` builtin on two answers, saying nil
 where it throws and `:runnable` where it says `:new`. The guest-facing doc in
-`lib/flint/thread.cljc` names `:new` among the answers, so the builtin is right
+`lib/stdextra/flint/thread.fln` names `:new` among the answers, so the builtin is right
 and the dead copies are wrong. They are deleted.
 
 *A duplicate nothing calls is not harmless.* It is a second answer to a
@@ -9097,7 +9097,7 @@ they had received the `tagged` half of that fix and not the `table_ref` half.
 Measured instead: `(:name row)` and `(get row :name)` agree on all three. The
 ports reach it because a row ref answers `isMap` and goes to `mapGet`; native
 names table refs explicitly. **Two routes to one promise** -- and
-`lib/flint/table.cljc` promises it in as many words, *"a ref reads as the map
+`lib/stdextra/flint/table.fln` promises it in as many words, *"a ref reads as the map
 it is: `count`, `get`, `(:col row)`, `keys`, `vals` and `=` against a map all
 work"* -- with nothing comparing the routes. `runtimes/conform-host/kwrow.cljc`
 compares them now, in the three-way transcript loop.
@@ -9626,14 +9626,14 @@ Every one was true when it was written.
 
 ### The one that was not a line number
 
-`lending-errors` was cited at `lib/flint/deps/resolve.cljc:383`, and the
+`lending-errors` was cited at `lib/deps/flint/deps/resolve.cljc:383`, and the
 paragraph around it said all three of `system-namespaces-and-deps`' delegation
 rules were inert in the shipped binary, that the function **had no caller
 anywhere in the tree**, and that the mint-authority-from-nothing case was not
 refused.
 
 `25c50dc6` fixed that on 2026-09-12 -- moved the function to
-`lib/flint/deps.cljc:707`, called it from `lib/flint/cli.cljc:225` before
+`lib/deps/flint/deps.cljc:707`, called it from `cli/lib/flint/cli.cljc:225` before
 anything is fetched, and added the test. It touched four files and **none of
 them was `DECISIONS.md`**, so the record went on describing a hole that had
 been closed for ten days, citing a file the function had left.

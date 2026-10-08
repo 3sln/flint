@@ -28,7 +28,13 @@ npx --yes esbuild src/flint.js \
 npx --yes esbuild src/stdextra.js \
   --bundle --format=esm --platform=neutral --target=es2020 \
   --external:./flint.js --outfile=dist/stdextra.js
-for f in flint.js stdextra.js; do
+# `@3sln/flint/deps`, the same shape: `flint.deps` is its own unit, optional, and
+# not the standard library (`DECISIONS.md#four-units`). `flint.cli` is in NEITHER
+# bundle -- it ships with the two CLIs only.
+npx --yes esbuild src/deps.js \
+  --bundle --format=esm --platform=neutral --target=es2020 \
+  --external:./flint.js --outfile=dist/deps.js
+for f in flint.js stdextra.js deps.js; do
   ls -l "dist/$f" | awk -v f="$f" '{printf "    dist/%s %.2f MB\n", f, $5/1048576}'
 done
 
@@ -47,7 +53,7 @@ rm -f "$selftest_out"
 
 node -e '
 const fs = require("fs");
-for (const file of ["dist/flint.js", "dist/stdextra.js"]) {
+for (const file of ["dist/flint.js", "dist/stdextra.js", "dist/deps.js"]) {
 const src = fs.readFileSync(file, "utf8");
 const bad = [/require\(/, /from\s*"node:/, /from\s*.node:/, /process\./, /__dirname/];
 for (const re of bad) {
