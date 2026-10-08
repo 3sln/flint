@@ -2361,11 +2361,24 @@ recommendation 2 of `composing-runtime-units` (relinking by relocations), and
 `namespace-units` and `modularity` as OUTPUT mechanisms. Those sections stay,
 with banners, because their reasoning is still what the runtime BUILD uses.
 
+**AMENDED 2026-10-08, same day, by the maintainer's corrections and decisions:**
+* the PROGRAM drives on every target, and is linked to the runtime. A wasm
+  program's image is an ACTIVE segment placed by instantiation;
+* linking is a version RESOLUTION driven by the artefact's metadata, not a
+  name-for-name match;
+* compatibility is a semantic-version requirement whose tolerance the image
+  chooses;
+* there are no special self-contained outputs;
+* there are no precompiled library artefacts;
+* LLVM metadata is a data symbol.
+
+The "Decided" list at the end records these.
+
 The wasm half is a proof of concept, `bench/host-runtime/run`. Every figure
-below marked *measured* is that script's output on this tree: `bin/build-dist`,
-then `cargo build --release -p flint-cli`, node v24.6.0, macOS aarch64, load
-averages 16 to 35 from work outside this tree. So the sizes are exact and the
-timings are coarse.
+below marked *measured* is that script's output on `cdfa59be`: `bin/build-dist`,
+then `cargo build --release -p flint-cli`, node v24.6.0, macOS aarch64. The load
+average was 4.2 for the table and 10 to 35 for earlier runs, from work outside
+this tree. So the sizes are exact and the timings are coarse.
 
 ### What was decided
 
@@ -2378,6 +2391,30 @@ flint-specific `link` entry point for this. The existing `link` operation
 (`four-operations`) keeps its meaning, which is a host overriding one
 builtin before `boot`. It is not how a program reaches its runtime, and this
 design does not reuse it for that.
+
+**The PROGRAM is the active thing, on every target.** The output is what a host
+loads and calls. It links to a runtime the host supplies, and its own boot
+entry hands the runtime its image. The runtime never goes looking for a
+program. Per target, the entry a host calls:
+
+| target | the program's driving entry | what it does |
+|---|---|---|
+| `:wasm` | the program module's exported `boot` | calls the runtime's imported boot with its own `image_base`, image length and `table_base`. A start function is equivalent, but cannot report a refusal |
+| `:jvm` | `Artifact.boot(bridge)` (static) | calls `com.flint.rt.Sandbox.boot(bridge, image chunks)`. This is already the case (`jvm.cljc`) |
+| `:clr` | `Artifact.Boot(bridge)` | calls the runtime's boot with its `FieldRva` image. This is already the case |
+| `:llvm` | `flint_program_<name>_boot(bridge)`, plus a weak `main` | calls `flint_rt_boot(&flint_program_<name>, bridge)` with its descriptor |
+
+The `boot`/`loop`/`link` face of `four-operations` is the program's face, and
+`runtimes/artifact-ops/contract.edn` already describes it as such.
+
+**Linking is RESOLUTION, not name-for-name.** The artefact's metadata says
+which runtime BEHAVIOUR the program was built against: a semantic version for
+each builtin group, an override for any single builtin, and the tolerance the
+image accepts. A runtime may carry more than one implementation of a builtin,
+each tagged with the behaviour version it provides. The shared resolver
+(below) binds each name the program uses to the implementation that satisfies
+its requirement. If nothing satisfies it, the link is refused, naming the
+builtin, the requirement and what the runtime offers.
 
 **Three of the four targets already work this way.** Checked against the tree,
 not the record:
@@ -2405,37 +2442,57 @@ program (*measured*, below).
 
 ### Per target: the artefact and how it links
 
-| target | the artefact | the runtime the host provides | the platform's link mechanism | the ABI marker a mismatch breaks on |
+| target | the artefact | the runtime the host provides | the platform's link mechanism | the link-protocol marker a mismatch breaks on |
 |---|---|---|---|---|
 | `:wasm` | a program module | `flint-runtime.wasm`, compiled once per host, one INSTANCE per sandbox | module imports, resolved at `WebAssembly.Instance` | import module name `flint.rt.abi.N`, so the wrong runtime is a `LinkError` naming it |
 | `:jvm` | one class | `flint-rt.jar` on the class path or in a class loader | symbolic class and method references, resolved by the JVM | a `getstatic` of `com/flint/rt/AbiN` as `boot`'s first instruction, so the wrong runtime is a `NoClassDefFoundError` at `boot` |
 | `:clr` | one assembly | `Flint.dll` | `AssemblyRef` and `TypeRef` rows, resolved by the binder | a `TypeRef` to `_3sln.Flint.AbiN` touched first in `Boot`, so the wrong runtime is a `TypeLoadException`. NOT the `AssemblyRef` version: the .NET Core binder accepts any HIGHER version, so a major bump would bind |
 | `:llvm` | one `.ll` text file | `libflintrt.a` (static) or a host that exports the runtime's symbols (dynamic) | the user's linker, or `dlopen` with `RTLD_NOW` | an undefined reference to the data symbol `flint_abi_vN`, so the wrong runtime is a link error, or a `dlopen` failure naming it |
 
-**`:wasm`, in detail.** The program module:
+`N` in those markers is the LINK-PROTOCOL major. It is the shape of the
+program↔runtime surface itself: the imports, the descriptor and the boot
+signature. It moves only when that surface does. It is NOT how behaviour is
+versioned. Behaviour versions are resolved per builtin group, as described in
+"The metadata" below, so a runtime that emulates an older behaviour still
+links.
 
-* imports, all from the module name `flint.rt.abi.N`: `memory`, and
-  `__indirect_function_table` plus a `table_base` i32 global when it carries
-  compiled arities, plus the seven `aot_*` helpers it calls;
-* carries the image as a PASSIVE data segment and exports
-  `flint_image_into(dst) -> len`, which is one `memory.init` into the
-  runtime's memory. Passive data is wasm's own carrier for "bytes for linear
-  memory", the bytes never round-trip through the host's language, and the
-  address is the runtime's to choose (`flint_in_alloc`). A custom section was
-  the alternative. It needs no code at all, but every host would have to copy
-  it out itself;
-* carries its compiled arities as ordinary functions, placed by an ACTIVE
-  element segment at offset `(global.get $table_base)` in the imported table;
-* carries metadata in the custom section `com.3sln.flint.meta`, as today.
+**`:wasm`, in detail.** **REVISED 2026-10-08 by the maintainer: the PROGRAM
+module drives, and is merely LINKED to the runtime.** The first draft had the
+runtime copy the image in from a passive segment. That is withdrawn, and so is
+its question about passive data against a custom section.
+
+The order is fixed by wasm itself. Imports cannot be mutual, so there is no
+cycle: the runtime is instantiated FIRST and imports nothing from the program.
+
+1. **The runtime module** exports its functions, `memory`, the funcref
+   `__indirect_function_table`, and two RESERVED BASE globals: `image_base`
+   (where program data goes in memory) and `table_base` (where program table
+   slots go). The runtime reserves both ranges when it is instantiated, and
+   they are immutable for that instance.
+2. **The program module** imports all of those from the module name
+   `flint.rt.abi.N`, along with the `aot_*` helpers and the builtins its
+   compiled code calls. Instantiation places its data and its arities:
+   * the image is an ACTIVE data segment at offset `(global.get $image_base)`.
+     Instantiation itself writes it into the shared memory, and no copy code
+     exists anywhere;
+   * compiled arities are its own functions, installed into the shared table by
+     an ACTIVE element segment at `(global.get $table_base)`. They call the
+     runtime through imports;
+   * metadata is the custom section `com.3sln.flint.meta`, as today.
+3. **The program boots itself.** It exports its entry points, plus a `boot`
+   (or a start function) that calls the runtime's boot with ITS OWN image
+   address and length, and its table base. The runtime adds the table base to
+   the image's compiled-arity slots, which the compiler now writes RELATIVE.
+   After that, a host calls in through the program's exports, which forward to
+   the runtime's call and pump exports.
 
 The host compiles `flint-runtime.wasm` ONCE and caches the `WebAssembly.Module`.
-Per sandbox it instantiates the runtime, then grows the runtime's table by the
-program's arity count and instantiates the program with the runtime's exports
-and `table_base` = the old table size. It calls `flint_image_into`, then
-`flint_load_image(ptr, len, table_base)`. The runtime adds `table_base` to the
-image's compiled-arity slots, which the compiler now writes RELATIVE. The
-runtime module must be linked `--growable-table`. Today its table is fixed at
-268 (min = max, read from `dist/flint-runtime.wasm`'s table section).
+Per sandbox it instantiates the runtime, then the program, then calls `boot`. A
+wrong ABI is a `LinkError` at step 2. A missing builtin is refused by
+`boot`, by name, before any program code runs. For `table_base` to cover a
+program's arity count, the runtime module needs `--growable-table` and has to
+reserve slots when it is instantiated. Today its table is fixed at 268 (min =
+max, read from `dist/flint-runtime.wasm`'s table section).
 
 **How compiled arities call the runtime: imports, not `call_indirect`.**
 `composing-runtime-units` measured both. A cross-instance import costs about 2×
@@ -2447,9 +2504,9 @@ through `CALL_NATIVE`. What gets slower is each `aot_*` helper call, and the
 interpreted path does not change at all. The A/B that settles whether that
 matters is step 4 below. It is not measured here.
 
-**`:jvm` and `:clr`.** These are unchanged in shape. They gain the ABI marker
-type and the `:requires` metadata below. `pack` (`jvm.cljc`) is demoted to an
-explicitly-named BUNDLE convenience, or deleted (question 2). When either target
+**`:jvm` and `:clr`.** These are unchanged in shape. They gain the
+link-protocol marker type and the `:requires` metadata below. `pack`
+(`jvm.cljc`) is DROPPED FOR NOW (decision 2). When either target
 gains compiled arities, they will be methods calling the runtime's static
 helpers by `invokestatic`/`call`, which is the platform's own link and needs no
 table.
@@ -2511,75 +2568,132 @@ What changes in the emitted IR:
 `runtimes/artifact-ops/contract.edn` already says the metadata is "pr-str of the
 map `src/flint/compiler/modmeta.cljc` builds -- ONE producer". This keeps that
 rule and adds what a LINK needs. The fields go into `modmeta/describe`, so
-they land in every target's carrier at once: the wasm custom section, the JVM
-class attribute, the CLR `CustomAttribute`, and the LLVM `flint_meta_<name>`
-symbol. Above the compatibility line:
+they land in every target's carrier at once:
+* the wasm custom section;
+* the JVM class attribute;
+* the CLR `CustomAttribute`;
+* the LLVM `flint_meta_<name>` symbol.
 
-* `:abi {:runtime N :value N :image N :aot N}`, the ABI major per layer. N is
-  also what the platform marker names (`flint.rt.abi.N`, `AbiN`, `flint_abi_vN`).
+**The requirement is ALSO in the image.** The image's native table carries the
+same requirement next to each name, in binary. The resolver that does the
+binding reads the image, and nothing in a runtime should have to parse EDN.
+`test/modmeta.clj` asserts that the two copies agree.
 
-Below it, descriptive but READ by every host at link:
+    :requires
+    {:link     {:version "1.0.0" :accept "^"}         ; the link protocol
+     :layers   {:image {:version "3.0.0" :accept "^"} ; format, value layout, opcode set,
+                :value {:version "1.0.0" :accept "^"} ; aot helper signatures
+                :ops   {:version "1.2.0" :accept "^"}
+                :aot   {:version "1.0.0" :accept "="}}
+     :groups   {"flint.rt.strings" {:version "2.1.0" :accept "~"}
+                "flint.rt.coll"    {:version "1.4.0" :accept "^"}
+                "flint.conc"       {:version "1.0.0" :accept "^"}}
+     :builtins {"flint.rt/str-split" {:version "2.1.3" :accept "="}} ; overrides its group
+     :uses     ["flint.rt/str-split" "flint.rt/conj" …] ; every name, from the native table
+     :capabilities ["fs"]
+     :llvm-min "15"}
 
-* `:requires {:builtins [names…] :capabilities [names…] :llvm-min "15"}`. The
-  builtin list is the image's native table, the same names `resolve_natives`
-  looks up. Capabilities are what is now `:meta {:capabilities …}` by CLI
-  convention, promoted to a field because a host has to refuse on it.
-* `:provides {:entry … :exports […]}`, the flint functions a host may call.
-  That closes the gap `modmeta.cljc` itself records ("`flint inspect` cannot
-  answer what can I call").
-* `:workspaces`/`:grants`, the compile-time workspace record. It is descriptive
-  only, because the guard is compile-time (`DECISIONS.md#workspace-capabilities`
-  is where that lives). It is recorded so that a host can display it.
+* **Where the version comes from.** `:version` is what the COMPILER compiled
+  against: the behaviour version that `dist/builtins.json` records for each
+  builtin and group. The compiler writes it. The author never does.
+* **Who chooses `:accept`.** The image does, through a compile option
+  (`:compat`) that sets the default tolerance and any per-group or per-builtin
+  pin. The spellings are `=` (exact), `~` (patch changes allowed) and `^` (any
+  non-major change).
+* **The other fields** are unchanged in kind:
+  * `:provides {:entry … :exports […]}`;
+  * `:workspaces`/`:grants`, which are descriptive only. The guard is
+    compile-time, see `DECISIONS.md#workspace-capabilities`.
 
-**The checker is written once, and so is the runtime's catalogue.** A runtime
-publishes its catalogue (ABI majors and its builtin names) through the same
-carrier its own build already uses: a custom section in `flint-runtime.wasm`,
-a static on `com.flint.rt.Abi`, a static on `_3sln.Flint.Abi`, and
-`flint_rt_catalogue()` natively. It is generated from `dist/builtins.json`.
-`link-check(program-meta, runtime-catalogue, host-capabilities) -> ok | error`
-is ONE function in `kin/`, emitted to Rust, Java and C#. The ESM SDK and the npm
-CLI call the Rust one through the runtime module's export, so no SDK parses the
-metadata by its own guesswork. Every SDK calls it before `boot`:
+**How a runtime declares what it provides: a CATALOGUE.** For each layer and
+each group, the catalogue lists the versions the runtime can serve. For each
+builtin, it lists its IMPLEMENTATIONS, each tagged with the behaviour version
+it provides:
+
+    {"flint.rt/str-split" [{:version "2.1.3" :impl 41}
+                           {:version "1.0.0" :impl 212}]}   ; kept to emulate 1.x
+
+An implementation kept for emulation is an ordinary builtin under an internal
+name. It is reached ONLY through the catalogue. The catalogue is GENERATED at
+runtime build time from one source, `dist/builtins.json` extended with
+versions. It travels in the runtime's own carrier:
+* a custom section in `flint-runtime.wasm`;
+* a static on `com.flint.rt.Abi`;
+* a static on `_3sln.Flint.Abi`;
+* `flint_rt_catalogue()` natively.
+
+**The resolver is written ONCE, in `kin/`, and runs INSIDE the runtime's boot.**
+
+    resolve(requirement, catalogue, host-capabilities) -> binding | refusal
+
+It is generated into Rust, Java and C#, so native, wasm (the Rust runtime
+compiled to wasm), the JVM and the CLR all run the same code. It replaces
+`resolve_natives`, which matches by name only. The procedure:
+1. Check each layer against the catalogue. A runtime may serve more than one
+   image or opcode version.
+2. For each name in `:uses`, take its constraint: the builtin's override if it
+   has one, otherwise its group's.
+3. Pick the HIGHEST implementation that satisfies the constraint, and write
+   that implementation's slot into the image's native table. Slots stay
+   internal to the runtime.
+4. Check `:capabilities` against what the host passed in.
+
+The result is either a complete binding or ONE refusal that lists everything
+unsatisfiable, not just the first problem. Because it runs inside boot, every
+SDK gets it by booting. Nothing is left for SDKs to guess.
+
+For a host that wants to decide BEFORE instantiating, the same function is
+exported as a dry run:
+* `flint_rt_resolve` on wasm and native;
+* `Abi.resolve` on the JVM and the CLR.
+
+The host passes it the metadata's `:requires`, which is the same table as in
+the image. Per host:
 
 | host | reads the program's metadata from | links by |
 |---|---|---|
 | native CLI `flint run <file>` | the container: the wasm custom section or the `.ll` symbol, through `flint_rt::native` | `Program::load_with` on its built-in runtime. A wasm program's AOT code cannot run natively, so it is interpreted, as today |
-| npm CLI, ESM SDK, `host/flint.mjs` | `WebAssembly.Module.customSections` | `guest.js`'s new `link(runtimeModule, programModule)` |
+| npm CLI, ESM SDK, `host/flint.mjs` | `WebAssembly.Module.customSections` | `guest.js`'s new `link(runtimeModule, programModule)`: instantiate the runtime, then the program, then call the program's `boot` |
 | Rust SDK, C API | the container, through `flint_rt::native` | `Sandbox::from_program`, which is `from_wasm` renamed for what it now is |
-| JVM host | the class attribute, read from the bytes without loading | a class loader whose parent holds `flint-rt.jar` |
-| CLR host | `MetadataReader` on the assembly, without loading | `AssemblyLoadContext.LoadFromStream`, resolving `Flint` to the host's |
+| JVM host | the class attribute, read from the bytes without loading | a class loader whose parent holds `flint-rt.jar`, then `Artifact.boot` |
+| CLR host | `MetadataReader` on the assembly, without loading | `AssemblyLoadContext.LoadFromStream`, resolving `Flint` to the host's, then `Artifact.Boot` |
 
-**Failure modes. Each one fails at LINK, and each one names its cause:**
+**Failure modes. Each one fails at LINK, before any program code runs, and names
+its cause:**
 
-* **Wrong runtime ABI.** The platform marker fails first, as a `LinkError`, a
-  `NoClassDefFoundError`, a `TypeLoadException` or an undefined `flint_abi_vN`.
-  Each of those already names the version in the symbol it could not find.
-  `link-check` runs before that and words it: "compiled for runtime ABI 2; this
-  host provides 1".
-* **A missing builtin.** `link-check` names it from `:requires`. The image
-  loader's `resolve_natives` (status 2) stays as the backstop, because it is
-  what actually reads the image.
-* **A capability the host lacks.** `link-check` refuses, naming the capability,
-  before `boot`. That decision is the host's. A grant is conferred from
-  outside (AGENTS.md §5), and `:requires :capabilities` is an assertion the
-  program makes about itself, so it can only ever cause a REFUSAL, never a
-  grant.
+* **A link-protocol mismatch.** The platform marker fails, as a `LinkError`, a
+  `NoClassDefFoundError`, a `TypeLoadException` or an undefined
+  `flint_abi_vN`.
+* **A layer, group or builtin whose requirement no implementation satisfies.**
+  The resolver refuses, naming each one, for example: "`flint.rt/str-split`
+  requires =2.1.3; this runtime provides 2.2.0, 1.0.0".
+* **A builtin the runtime lacks entirely.** This is the same refusal, with
+  "provides: none".
+* **A capability the host lacks.** The resolver refuses, naming the
+  capability. A grant is conferred from outside (AGENTS.md §5), and
+  `:capabilities` is an assertion the program makes about itself, so it can
+  only ever cause a REFUSAL, never a grant.
 * **LLVM older than the floor.** The user's `clang` rejects the IR at parse
-  time. That cannot be worded by flint. `:llvm-min` and the help text are the
+  time. flint cannot word that failure. `:llvm-min` and the help text are the
   mitigation.
 
-**Compatibility is ABI-major equality plus a subset check on builtins.** Adding a
-builtin breaks no program. Removing or renaming one, or changing what one
-MEANS, does break programs, and so does changing the image format, the value
-layout, an `aot_*` signature or an opcode's meaning. A change to what a
-builtin means takes a new name or an ABI major bump. Nothing can detect it,
-which is why it is a rule (question 1). This replaces `contract.edn`'s
-"nothing decides what compatible means" once ratified.
+**Compatibility, decided:** the image declares a semantic-version requirement
+for each layer and group, with optional per-builtin overrides, and chooses its
+own tolerance. The runner links smartly:
+* if an older behaviour is required and the runtime still carries an
+  implementation of it, the runner binds that implementation;
+* if it cannot satisfy a requirement, it refuses at link time.
+
+The rule that makes this sound: **a behaviour change is a version bump of its
+builtin or group**, a major bump if it is incompatible. A runtime that wants to
+keep running older images keeps the older implementation and lists it in its
+catalogue. This replaces `contract.edn`'s "nothing decides what compatible
+means" once ratified.
 
 **`dist/slots.json` stops being an ABI.** Images already resolve by name on every
 runtime, and wasm does too (`flint_load_image` → `resolve_natives`). The JVM, CLR
 and LLVM doors already compile "with an EMPTY slot map". So the compiler needs
-only the builtin NAMES (`dist/builtins.json`). Slots become the wasm runtime's
+only the builtin NAMES and their behaviour versions (`dist/builtins.json`). Slots become the wasm runtime's
 own table layout, invisible outside it. That removes the stale-slot-table trap
 AGENTS.md §3 records, where the doors disagreed by 1 166 bytes because a CLI had
 embedded an old `slots.json`.
@@ -2607,11 +2721,16 @@ already the case. A native `Program` owns its own reserved `Space`
 
 **Snapshots and shelving** are unaffected in format. A live set already records
 the IMAGE fingerprint and refuses a different image (`runtime/src/snap.rs`,
-`REFUSE_IMAGE`). Restoring is: a fresh runtime instance, then the same program
-module linked at the same `table_base`, then `flint_load_image`, then
-`import_live`. `table_base` is deterministic, because it is the fresh runtime
-table's size. It is recorded in the live set anyway, and a restore at a
-different base is refused rather than trusted. A shelved sandbox is therefore
+`REFUSE_IMAGE`). Restoring is:
+1. a fresh runtime instance, whose reserved `image_base` and `table_base` are
+   deterministic for a given runtime build;
+2. the same program module, instantiated against it, so its active segments
+   land where they did before;
+3. the program's `boot`;
+4. `import_live`.
+
+Both bases are recorded in the live set anyway, and a restore at different
+bases is refused rather than trusted. A shelved sandbox is therefore
 `(program artefact identity, live set)`, and the runtime is not part of it.
 
 ### Sizes and costs
@@ -2623,20 +2742,36 @@ every one matched. "aot code" is the body bytes of the arities `:optimize
 [perf]` appends. Timings are the median of 15 interleaved rounds. The shipped arm
 gets a nonce custom section each round, which defeats V8's module cache.
 
-| program | shipped `.wasm` | image | aot arities | aot code | shipped compile+inst ms | cached-runtime inst+load ms | shipped e2e ms | cached-runtime e2e ms |
-|---|---|---|---|---|---|---|---|---|
-| trivial | 696 481 | 25 119 | 295 | 134 819 | 2.97 | 0.75 | 14.7 | 1.2 |
-| nqueens | 699 473 | 27 331 | 338 | 148 771 | 3.47 | 0.77 | 258.3 | 224.2 |
-| words | 762 422 | 45 178 | 509 | 271 648 | 3.34 | 0.84 | 109.4 | 58.3 |
-| lzw | 714 783 | 30 557 | 354 | 167 742 | 3.20 | 0.74 | 76.7 | 27.7 |
-| sudoku | 732 045 | 30 431 | 382 | 171 122 | 3.31 | 0.89 | 9 863.7 | 10 410.7 |
-| json | 705 872 | 31 444 | 369 | 175 644 | 3.20 | 0.79 | 17.0 | 1.4 |
+| program | shipped `.wasm` | image | program module | aot arities | aot code | shipped compile+inst ms | cached-runtime inst+link+boot ms | shipped e2e ms | cached-runtime e2e ms |
+|---|---|---|---|---|---|---|---|---|---|
+| trivial | 696 481 | 25 119 | 25 271 | 295 | 134 819 | 1.43 | 0.54 | 7.3 | 0.9 |
+| nqueens | 699 473 | 27 331 | 27 483 | 338 | 148 771 | 1.37 | 0.59 | 102.5 | 91.5 |
+| words | 762 422 | 45 178 | 45 330 | 509 | 271 648 | 1.49 | 0.87 | 39.8 | 22.4 |
+| lzw | 714 783 | 30 557 | 30 709 | 354 | 167 742 | 1.69 | 0.63 | 26.4 | 11.4 |
+| sudoku | 732 045 | 30 431 | 30 583 | 382 | 171 122 | 1.59 | 0.60 | 6 027.3 | 6 190.1 |
+| json | 705 872 | 31 444 | 31 596 | 369 | 175 644 | 1.62 | 0.58 | 10.2 | 1.0 |
 
-* **An interpreted program artefact is 3.6–5.9% of today's output.** That is
-  the image (25–45 KB) plus a module header of tens of bytes. The header is
-  estimated, not built. With compiled arities, the artefact adds 135–272 KB of
-  function bodies. The 295 arities in the TRIVIAL program are clojure.core's
-  reach. They would be identical in every program, which raises question 3.
+* **What the PoC runs is the decided wasm shape, for the interpreted case.**
+  * The host instantiates the runtime first.
+  * It then instantiates a real PROGRAM MODULE, hand-built by
+    `bench/host-runtime/poc.mjs` (`programModule`). That module imports
+    `memory`, `image_base` and `flint_load_image` from `flint.rt.abi.1`, and
+    carries the image as an ACTIVE data segment at `(global.get
+    $image_base)`. Instantiation writes the image into the runtime's memory,
+    and no code copies it.
+  * The host calls the program's exported `boot`, which calls
+    `flint_load_image` with its own image's address. All six outputs match the
+    shipped modules.
+  * ONE STAND-IN: today's runtime exports no reserved base global. The host
+    reserves the range with `flint_in_alloc` and passes the address as a
+    `WebAssembly.Global`.
+  * Compiled arities in the program module (an active element segment at
+    `table_base`, with imported helpers) are NOT in the PoC.
+* **An interpreted program artefact is 3.6–5.9% of today's output.** It is
+  the image plus 152 bytes of module. With compiled arities, it adds 135–272 KB
+  of function bodies. The 295 arities in the TRIVIAL program are clojure.core's
+  reach. By decision 3 they stay in each program: the image is the compilation
+  of ALL of the program's flint code, the stdlib included.
 * **The runtime ships once per host:** `dist/flint-runtime.wasm` is 832 940
   bytes and `flint-runtime-aot.wasm` is 841 390 (this tree). They merge into
   one module, because the `aot_*` exports are 8 450 bytes. `flint-rt.jar` was
@@ -2648,9 +2783,9 @@ gets a nonce custom section each round, which defeats V8's module cache.
   programs comes out ahead.
 * **Instantiation.** `new WebAssembly.Module` of the 833 KB runtime took 2 ms,
   which is consistent with V8 compiling lazily. So compile+instantiate alone
-  understates the shipped arm. End to end (instantiate, load, run `main`), the
-  cached runtime is FASTER on short runs: 1.2 against 14.7 ms for the trivial
-  program, and 1.4 against 17.0 for json. That is because a fresh module
+  understates the shipped arm. End to end (instantiate, link, boot, run `main`),
+  the cached runtime is FASTER on short runs: 0.9 against 7.3 ms for the
+  trivial program, and 1.0 against 10.2 for json. That is because a fresh module
   recompiles every function it reaches, and a cached runtime reuses code an
   earlier sandbox compiled. On long runs the two arms are within noise
   (nqueens, sudoku). That is the boundary a user waits on
@@ -2677,17 +2812,21 @@ gets a nonce custom section each round, which defeats V8's module cache.
     KB of base64 `compile_q` passes today, and its removal is also a compile-time
     win;
   * `composing-runtime-units` recommendations 2 and 5, the relink and the
-    segment replacement. Both are about a runtime inside the output.
+    segment replacement. Both are about a runtime inside the output;
+  * **dropped for now (decision 2):**
+    * `jvm.cljc/pack`, which appends the class to `flint-rt.jar`;
+    * any bundled-wasm compile mode.
+
+    "Self-contained" means shipping an SDK and an image together. No compile
+    mode produces it.
 * **Demoted:**
   * per-program linking (`flint.compiler.link`, `bin/flint`'s `rust-lld`
     output path) stops being an output mechanism;
   * units (`bin/build-units`, `namespace-units`) remain how the RUNTIME is
-    BUILT, and how a host could build a trimmed runtime. `link-check`'s
+    BUILT, and how a host could build a trimmed runtime. the resolver's
     missing-builtin refusal is what makes a trimmed runtime safe;
   * `modularity`'s requirement, "only reachable code ships", now holds of the
     PROGRAM artefact, and the runtime ships once per host, whole;
-  * `jvm.cljc/pack` becomes a named bundle convenience, or is deleted
-    (question 2).
 * **Rewritten:**
   * size budgets: a program budget and a separate runtime budget, where one
     figure used to mix them;
@@ -2703,19 +2842,29 @@ gets a nonce custom section each round, which defeats V8's module cache.
 ### Migration, in gateable steps
 
 1. **This record.** `bin/check-decisions`.
-2. **Metadata and the checker.**
-   * `:abi` majors, `:requires` and `:provides` go into `modmeta/describe`;
-   * the runtime catalogue goes into each runtime;
-   * `link-check` is written in `kin/`;
-   * `contract.edn` gains `:requires` and the ABI marker spellings, so
-     `bin/check-artifact-ops` covers them.
-   * Gate: `test/modmeta.clj`, plus a probe per runtime (AGENTS.md §5). A
-     program requiring a builtin the runtime lacks must refuse before `boot`
-     and name the builtin. The control is the same program with the builtin
-     present.
+2. **Versions, the catalogue and the resolver.**
+   * `dist/builtins.json` gains behaviour versions per group and per builtin.
+   * The compiler writes `:requires` into the image's native table and into
+     `modmeta/describe`, and gains the `:compat` option.
+   * Each runtime's catalogue is generated from `dist/builtins.json`.
+   * `resolve` is written in `kin/`, replacing `resolve_natives`, and is
+     exported as a dry run.
+   * `contract.edn` gains `:requires` and the link-protocol marker spellings,
+     so `bin/check-artifact-ops` covers them.
+   * Gate: `kin/scripts/verify` on the resolver, `test/modmeta.clj`, and a
+     probe per runtime (AGENTS.md §5). Three cases, each with a control that
+     differs only in the version:
+     * a pin the runtime can meet only through its OLDER implementation must
+       bind that implementation;
+     * a pin it cannot meet must refuse before `boot`, naming the builtin;
+     * a missing capability must refuse.
 3. **wasm, interpreted.**
-   * A program-module emitter (`flint.compiler.wasmprog`), a merged runtime
-     linked `--growable-table`, and `guest.js` `link`.
+   * A program-module emitter (`flint.compiler.wasmprog`). It replaces the
+     hand-built module in `bench/host-runtime/poc.mjs`.
+   * A merged runtime, linked `--growable-table`, that exports the reserved
+     `image_base`/`table_base` globals.
+   * `guest.js` `link`: instantiate the runtime, then the program, then call
+     `boot`.
    * Then switch `:to :wasm` in all four doors together (one fact, four front
      doors): `cli/src/main.rs`, `bin/flint`, `sdks/esm/src/flint.js` and the
      npm CLI.
@@ -2729,11 +2878,11 @@ gets a nonce custom section each round, which defeats V8's module cache.
      shipped module against program+runtime, interleaved, with `uptime`
      recorded. The import cost is priced HERE, before the old path is deleted.
 5. **LLVM.**
-   * A program descriptor, a per-sandbox AOT table, `flint_abi_vN`,
+   * A program descriptor carrying the requirement table, a per-sandbox AOT table, `flint_abi_vN`,
      `flint_meta_<name>`, and the `flint_rt_` prefix.
    * Gate: `bin/check-llvm` links two programs into ONE executable, and runs
      `llvm-as` from two LLVM releases.
-6. **JVM and CLR.** The ABI marker types and the `:requires` check at `boot`.
+6. **JVM and CLR.** The link-protocol marker types, and the resolver at `boot`.
    * Gate: `bin/check-four-ops` and `bin/check-clr`, plus the wrong-ABI probe
      on each.
 7. **Delete** what is listed above. Rewrite the size budgets. Put superseded
@@ -2746,28 +2895,63 @@ gets a nonce custom section each round, which defeats V8's module cache.
   This is mitigated by the fact that no flint module was standalone in
   practice: all of them already needed `guest.js`'s pump.
 * **Version skew in the field.** An ESM SDK at one version runs programs
-  compiled by a CLI at another. The ABI marker and the subset check catch what
-  they can see. A changed MEANING of a builtin is invisible to both, so the
-  rule in question 1 has to hold by discipline.
+  compiled by a CLI at another. The resolver catches everything that was VERSIONED.
+  A change of behaviour that ships without a version bump is invisible to it.
+  So "a behaviour change is a version bump" has to hold by discipline. Its
+  natural gate is the conformance corpus: a builtin's outputs change, and its
+  version must change with them.
+* **Emulation has a cost.** Every older implementation a runtime keeps is code
+  that every host carries. How many to keep is a policy question, not a
+  mechanism question.
 * **The AOT boundary cost is unpriced** until step 4. If imports turn out to be
   too slow, the fallback is to ship compiled arities INSIDE a per-program copy
   of the runtime for `:optimize [perf]` only. That is exactly what this design
   removes, so it would be a real retreat.
 * **A host serving one tiny program downloads about 136 KB more** than today's
   shaken output.
+* **The PoC does not cover compiled arities.** It also does not cover the
+  runtime exporting its own base globals.
 
-### Questions for the maintainer
+### Decided by the maintainer, 2026-10-08
 
-1. Is compatibility ABI-major equality plus a builtin subset, with "a builtin
-   never changes meaning under the same name" as the rule?
-2. Does any fat or standalone output survive (`jvm/pack`, or a wasm bundle for
-   hosts with no flint runtime), or is a program never standalone?
-3. Should clojure.core's compiled arities, about 135 KB in every perf
-   program, ship once WITH the runtime as a precompiled core?
-4. Should LLVM metadata be a symbol (recommended, because it needs no triple)
-   or a section that requires a triple at compile time?
-5. Should the wasm image be carried as passive data (recommended) or as a
-   custom section?
+These are recorded as decided. The Ratified box above is still the maintainer's
+to tick.
+
+1. **Compatibility is a semantic-version REQUIREMENT, and the image chooses
+   its tolerance.** The tolerance can be an exact pin, non-major changes, or
+   anything else range-like. The runner links smartly: it binds an older
+   implementation when the requirement names a behaviour that implementation
+   still provides. It refuses at link time, naming what is unsatisfiable,
+   when it cannot.
+2. **No special self-contained outputs, for now.** `jvm/pack` and bundled wasm
+   are dropped as compile modes. Self-contained means an SDK and an image
+   shipped together.
+3. **No precompiled library artefacts.** All flint code, the stdlib included,
+   goes into the image. The image is the compilation of ALL of the program's
+   flint code. The idea that clojure.core's compiled arities ship with the
+   runtime is dropped.
+4. **LLVM metadata: my call, and it is a constant data symbol**,
+   `flint_meta_<name>`, kept by `@llvm.used` and pointed to by the program
+   descriptor.
+   * The more idiomatic carrier in the LLVM ecosystem is a SECTION. Rust uses
+     `.rustc`, and clang embeds bitcode in `.llvmbc` / `__LLVM,__bitcode`.
+   * Every one of those producers knows its target triple when it writes the
+     section, because the section's name is object-format-specific. ELF uses
+     `.x`, Mach-O uses `__SEG,__sect`, and COFF limits image section names to
+     8 bytes.
+   * flint's `.ll` names no triple, and it should not need one.
+   * A symbol survives into every format unchanged. A dynamic host reads it
+     with `dlsym`. Tools read the `.ll` itself, because that is flint's
+     artefact.
+   * If a compile is ever given a triple, it can ADD the idiomatic section
+     beside the symbol. Nothing reads only the section.
+
+### Still open
+
+* The default `:accept` when a compile names none. `^` is suggested.
+* How many older implementations a runtime keeps, and for how long.
+* Whether behaviour versions are assigned per group by default (fewer numbers
+  to maintain) or per builtin.
 
 ---
 
