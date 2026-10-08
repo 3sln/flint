@@ -16179,6 +16179,29 @@ sizes are estimates from reading the code, not measurements.
    claimed by construction only. `test/reader_test.clj` still runs on
    `reader.cljc` (it is babashka, which cannot call a generated reader).
 
+   *Found, NOT fixed, migrating `bin/flint` off babashka (step 1.2 below):*
+   `kin/readform.kin`'s `read-tagged` (a custom `#tagname` reader tag,
+   deferred) builds a metadata map
+   `{:flint/read-form .. :flint/read-tag .. :flint/read-var .. :line ..
+   :column .. :file ..}` -- `kin/readsq.kin`'s `sq-gensym` (an auto-gensym
+   inside syntax quote, also deferred) builds the same shape for the same
+   reason, both being a "resolve this later" marker. Checked by hand (one
+   `deferred-read` call, `flint.driver.host-reader`, against
+   `flint.project/preread` on the same text and tag map): for `#pt [1 2]`
+   with a tag `pt` bound to `a/point`, the kin reader and the guest answer
+   the SAME bytes in every respect but the order the string table lists
+   `read-form`/`read-tag`/`read-var` in -- the guest lists them in the
+   literal's own order (array-map, insertion order, <=8 entries), the kin
+   reader in a different order, which moves every string-table index after
+   it and so the whole byte string. Not in `bin/check-reader`'s 489-read
+   sweep: no `deps.edn` in this tree declares `:flint/tag-readers`
+   (`test/tags.clj`'s fixtures write their own, in a temp dir the sweep does
+   not reach), so this is a real gap in "every one byte-identical" rather
+   than something that sweep already disproves. Out of scope for this
+   migration (a kin-generated-code question, not a driver one); recorded so
+   the next person reading "489 reads, 0 differ" does not read it as
+   covering reader tags.
+
    **Resolved 2026-10-07: canonical Clojure's own behaviour, no better option
    found.** Real Clojure shares ONE counter (`clojure.lang.RT/nextID`) across
    every read in a process and spells an auto-gensym `name__N__auto__`; this
