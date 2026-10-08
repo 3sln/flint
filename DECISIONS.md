@@ -16184,16 +16184,149 @@ sizes are estimates from reading the code, not measurements.
    was true: no export reached `read_forms`.) `test/reader_test.clj` still runs on
    `reader.cljc` (it is babashka, which cannot call a generated reader).
 
-   *Open, found building it:* an AUTO-GENSYM (`x#`) is not a function of the
-   text. The guest's reader called `gensym`, whose counter belongs to the
-   process, so a file's `x__N` depended on whatever ran first; the kin reader
-   numbers from the `gensym0` it is given. Measured: identical when the guest's
-   counter is fresh (a one-file read gives `x__1` both ways), different in a
-   batch. Numbering per read makes two files' templates able to share a name
-   (`a__1`), which is a hygiene hazard when one macro's expansion is passed into
-   another's. No file in the sweep has an auto-gensym, so no image changes
-   today; the choice of a hygienic per-read scheme (a file-unique suffix, or a
-   marker the analyzer numbers as it does `syntax-quoted`) is the maintainer's.
+   *Found, NOT fixed, migrating `bin/flint` off babashka (step 1.2 below):*
+   `kin/readform.kin`'s `read-tagged` (a custom `#tagname` reader tag,
+   deferred) builds a metadata map
+   `{:flint/read-form .. :flint/read-tag .. :flint/read-var .. :line ..
+   :column .. :file ..}` -- `kin/readsq.kin`'s `sq-gensym` (an auto-gensym
+   inside syntax quote, also deferred) builds the same shape for the same
+   reason, both being a "resolve this later" marker. Checked by hand (one
+   `deferred-read` call, `flint.driver.host-reader`, against
+   `flint.project/preread` on the same text and tag map): for `#pt [1 2]`
+   with a tag `pt` bound to `a/point`, the kin reader and the guest answer
+   the SAME bytes in every respect but the order the string table lists
+   `read-form`/`read-tag`/`read-var` in -- the guest lists them in the
+   literal's own order (array-map, insertion order, <=8 entries), the kin
+   reader in a different order, which moves every string-table index after
+   it and so the whole byte string. Not in `bin/check-reader`'s 489-read
+   sweep: no `deps.edn` in this tree declares `:flint/tag-readers`
+   (`test/tags.clj`'s fixtures write their own, in a temp dir the sweep does
+   not reach), so this is a real gap in "every one byte-identical" rather
+   than something that sweep already disproves. Out of scope for this
+   migration (a kin-generated-code question, not a driver one); recorded so
+   the next person reading "489 reads, 0 differ" does not read it as
+   covering reader tags.
+
+   **Resolved 2026-10-07: canonical Clojure's own behaviour, no better option
+   found.** Real Clojure shares ONE counter (`clojure.lang.RT/nextID`) across
+   every read in a process and spells an auto-gensym `name__N__auto__`; this
+   tree's guest reader (`src/flint/reader.cljc`) already had the shared
+   counter half right (`gensym` is a process-wide, never-reset counter on both
+   dialects -- `clojure.lang.RT/nextID` under `:default`,
+   `clojure/core.cljc`'s own `gensym-counter` atom under `:flint`) and was only
+   missing the `__auto__` suffix, fixed there in one line
+   (`(symbol (str (gensym (str base "__")) "__auto__"))`). The kin reader
+   (`kin/readsq.kin`'s `sq-gensym`) gained the same suffix, regenerated into
+   all three targets (`bin/check-kin` green). Its numbering was already an
+   ARGUMENT (`gensym0`, "the first number to use this read") rather than an
+   owned counter, so making it process-wide and never-reset is the HOST's
+   job: the JVM driver (`flint.driver.host-reader`, step 1.2 below) keeps one
+   atom, seeded past the highest `__auto__` number any read in the process has
+   used so far (scanning the decoded forms after each read -- `readForms`
+   reports bytes or an error, not a count, so this is how the driver learns
+   what it spent). No better option was found: a file-unique suffix or an
+   analyzer-numbered marker (the alternatives this entry used to list) would
+   make the kin reader's output depend on something OTHER than canonical
+   Clojure's own rule, which is the one thing every other dialect decision in
+   this file tries not to do. No file in `lib/`, `src/`, `corpus/` or the test
+   fixtures uses an auto-gensym (re-checked 2026-10-07, same grep as when this
+   was first written), so no shipped image's bytes change; `bin/check-reader`'s
+   489-read sweep is unaffected for the same reason, and is not itself a test
+   of this fix -- nothing in it exercises `x#`.
+
+   **Sub-step 2 BUILT 2026-10-07:** `bin/flint` is a thin `sh` wrapper over a
+   JVM Clojure driver (`driver/flint/driver/main.clj`), requiring the
+   compiler's own `src/` namespaces directly. It implements
+   `flint.project/Resolver` over the filesystem through
+   `flint.project/fn-resolver`, reading each file through the kin Java reader
+   (`flint.driver.host-reader`, `clojure.lang.Reflector` over
+   `runtimes/jvm/src/com/_3sln/flint/kgen/rt/Formsenc.readForms`) rather than
+   `flint.reader`; `collect`, `topo-order`, `refuse-guarded-requires!` and
+   `core-first` -- babashka `bin/flint`'s own hand-written copies of
+   `flint.project` -- are deleted in favour of
+   `flint.project/resolve-project-waves`, the one wave walk every door now
+   goes through. *What proves it:* `bb test/door-agreement.clj` green
+   end to end, including `the WHOLE COMPILER: bin/flint and the native CLI
+   agree byte for byte` (compiles `flint.selfhost/main` itself, `:to :clr`,
+   through this driver and through `target/release/flint`, byte-identical)
+   and the plain/`:optimize [perf]` matrix on `:to :clr`/`:jvm`/`:llvm`
+   agreeing across `bb`, the native CLI and the npm CLI; `bb test/cli.clj`
+   green, 115 checks; `bb test/selfhost.clj` green (gen0/gen1 identical, gen2
+   reproduces itself); `bb test/selfhost-targets.clj` green, 12 targets;
+   `bin/check-reader` green, 489 reads x 3 runtimes, 0 differ; `bin/check`
+   green end to end, 444s, kin untouched so `check-kin` correctly skipped
+   itself. JVM start-up cost is accepted (the maintainer's
+   decision): `clojure -M -e '(require (quote flint.compiler))'` is ~16-22s
+   wall from a warm cache, measured 2026-10-07 on a machine under heavy
+   unrelated load (`uptime` load averages seen from 1.7 to 75 across this
+   session -- see AGENTS.md sec. 3/4 on why a figure from a contended machine
+   is not a timing claim).
+
+   *Found and fixed along the way, each its own commit:* `src/flint/link.cljc`'s
+   `nightly-file` derived a repo-relative path from `*file*`'s
+   `.getAbsoluteFile`, which only worked under babashka's absolute classpath
+   entries; fixed to ask the classloader where it actually found the file
+   (`io/resource`) instead. `flint task`/`flint build` need the CALLER's
+   working directory left alone (their own `deps.edn` lives there), so
+   `bin/flint` no longer `cd`s to the repo root at all -- the repo root
+   travels as `FLINT_ROOT`, set in a subshell. A root `deps.edn` for the
+   JVM's OWN classpath collided with `flint.cli`/`flint.deps`, which read a
+   "deps.edn" in the current directory as a flint project's own manifest
+   (same keys, on purpose); `-Sdeps` on the command line did not fix this
+   either, since `clojure` still merges the CALLER's own deps.edn in before
+   this door's `-Sdeps` -- fixed with `-Scp`, a classpath string computed
+   once and cached, which resolves no deps.edn at all. `clojure` ALSO prints
+   an unconditional `DEPRECATED: Libs must be qualified ...` lint over
+   whatever deps.edn sits in the caller's directory, regardless of `-Scp`,
+   onto stderr; filtered in `bin/flint` alongside the `WARNING:` lines
+   fifteen `clojure.core` name-shadowing `def`s in `flint.rt`/`flint.reader`/
+   `flint.macros`/`flint.clr` print under plain Clojure and babashka never
+   did (tried fixing those with `:refer-clojure :exclude`, found it breaks
+   `flint.rt`'s own earlier, legitimate uses of the shadowed `clojure.core`
+   name before its local redefinition point, reverted).
+
+   Two more, found running `bin/check` end to end rather than just the
+   suites `bin/flint` itself is the subject of: `bin/check-four-ops`,
+   `bin/build-jvm-artifact` and `bin/check-sdk` each still invoked `bin/flint`
+   as `bb <path> ...` or `["bb" (str root "/bin/flint") ...]` -- sensible
+   while it was a babashka script, and `bb ./bin/flint ...` now asks
+   babashka to read the shell script's own prose as Clojure ("No reader
+   function for tag The", from a comment). Fixed to invoke it directly, the
+   way every caller that was already fine (`test/door-agreement.clj`,
+   `test/selfhost-targets.clj`) does -- "bb" there is a `case` label for
+   which door, never part of the argv. Separately, `--emit-spec`'s resolved
+   sources carried `:preread` bytes and no `:src`, so a spec handed back to
+   the self-hosted compiler (`bin/check-sdk`'s reference artifact, through
+   `host/flint-argv.mjs`) had nothing for `flint.compiler/read-source`'s
+   `:src`-or-nothing fallback to fall back TO once `:forms` was dissoc'd for
+   printing -- "no source for namespace clojure.core" on every namespace.
+   `resolve-ns` already has the text in hand; the fix is keeping it in the
+   answer rather than dropping it, dead weight on the ordinary compile path
+   (`read-entry` never reaches it there) and load-bearing on the two doors
+   that build a spec instead of compiling directly.
+
+   **Sub-step 3 BUILT** by construction, not by a separate change: the "bb
+   door" in `test/door-agreement.clj` and `test/selfhost-targets.clj` is a
+   subprocess call to `./bin/flint`, which is the JVM driver now -- nothing
+   in either test file needed to change for its "bb" arm to mean this.
+   `test/resolver-protocol.clj` (babashka reifying the protocol directly, not
+   through `bin/flint`) is untouched and still babashka; it demonstrates the
+   protocol can be implemented in babashka, which remains true, and is not
+   "the bootstrap" this sub-step is about.
+
+   **Sub-step 4 NOT DONE.** `src/flint/reader.cljc` is not deleted:
+   `flint.compiler/read-source` still falls back to `flint.reader/read-all`
+   when a source arrives with `:src` and no `:forms` --
+   `test/selfhost.clj`'s own hand-built spec does this (it reads with
+   `flint.reader` directly, under babashka, for its "gen0") -- and
+   `flint.analyzer`, `flint.forms` and `flint.project/resolve-conditionals`
+   still call forms-level helpers that live in that file
+   (`syntax-quoted?`, `bookkeeping-meta`, `require-clauses`,
+   `position-meta`) but are not text parsing. "After host-side reading
+   everywhere, the compiler only decodes" is not quite true yet: deleting
+   this file needs that fallback removed or proven unreachable, and those
+   four helpers moved somewhere `flint.reader.cljc` is not. Recorded rather
+   than attempted.
 2. **`flint.selfhost/compile`**, taking the request map and answering data
    (§1). The old `main` modes become thin wrappers that build the same map,
    so no door changes. *Gate:* `bb test/door-agreement.clj`,

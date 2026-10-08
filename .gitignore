@@ -1,6 +1,9 @@
 .agent.log
 target/
 out/
+# clojure CLI's classpath cache, keyed off deps.edn's hash -- bin/flint (the
+# JVM driver) produces this on first run.
+.cpcache/
 *.wasm.tmp
 Cargo.lock
 

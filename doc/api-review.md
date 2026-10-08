@@ -898,7 +898,10 @@ reviewer's; it is the same question their "Is this public?" line asks.
 **Reviewed:** ☐ not signed off
 
 `flint compile` — served by THREE doors, not two: the native CLI
-(`target/release/flint`), `bin/flint` (babashka), and the npm CLI (`sdks/cli`).
+(`target/release/flint`), `bin/flint` (a JVM Clojure driver as of
+`DECISIONS.md#namespaces-over-the-system-port` migration step 1.2 -- it was
+babashka when the table below was measured, and the sizes have not been
+re-measured since), and the npm CLI (`sdks/cli`).
 `bin/check-api-review` compares which COMMANDS exist and not what they accept, so
 a target added to this option is invisible to it — which is why they are written
 down here.

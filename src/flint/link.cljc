@@ -51,8 +51,24 @@
   the process runs from the repository root -- and `flint task`, `flint build`
   and every test that runs `bin/flint` from a project directory do not, so they
   failed with `FileNotFoundException: bin/nightly-toolchain` (eight rows of
-  `test/cli.clj`, found 2026-10-06)."
-  (str (io/file (.. (io/file *file*) getAbsoluteFile getParentFile getParentFile getParentFile)
+  `test/cli.clj`, found 2026-10-06).
+
+  THROUGH `io/resource`, not `*file*`. `*file*` used to be walked up three
+  parents with `getAbsoluteFile`, which is true of babashka's classpath (an
+  ABSOLUTE `root/src:root/lib`) and false of the JVM driver's (`deps.edn`'s
+  `:paths [\"src\" ...]`, relative): there `*file*` is the RESOURCE path
+  (`flint/link.cljc`, classpath-relative, two segments) rather than a
+  filesystem path, and `.getAbsoluteFile` silently resolved it against the
+  working directory anyway -- one `getParentFile` short, landing in the
+  WORKTREE'S PARENT rather than its root. `FileNotFoundException:
+  .../nightly-toolchain` on a plain `:to :wasm` compile, found migrating
+  `bin/flint` off babashka (`DECISIONS.md#namespaces-over-the-system-port`
+  step 1.2). `io/resource` asks the CLASSLOADER where it actually found this
+  file, which is a real filesystem URL on every loader -- babashka's or the
+  JVM driver's -- so the walk up three parents lands on the repo root either
+  way."
+  (str (io/file (.. (io/as-file (io/resource "flint/link.cljc"))
+                    getAbsoluteFile getParentFile getParentFile getParentFile)
                 "bin" "nightly-toolchain")))
 
 (defn lld-path []

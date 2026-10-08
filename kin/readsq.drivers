@@ -1328,7 +1328,7 @@ namespace Flint.Rt {
         System.Console.WriteLine(o.ToString().Trim());
     }
 --expect
-t1[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (flint.reader/syntax-quoted a)) (clojure.core/list b) c)) t2[0]=(clojure.core/vec (clojure.core/concat (clojure.core/list a) (clojure.core/list 1))) t3[0]=(clojure.core/set (clojure.core/concat (clojure.core/list :x))) t4[0]=(clojure.core/apply clojure.core/hash-map (clojure.core/concat (clojure.core/list :a) (clojure.core/list 2) (clojure.core/list :b) (clojure.core/list 1) (clojure.core/list :c) (clojure.core/list 3))) t5[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (quote if)) (clojure.core/list (flint.reader/syntax-quoted a)) (clojure.core/list (flint.reader/syntax-quoted b)))) t6[0]=(quote .foo) t7[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (quote x__10)) (clojure.core/list (quote y__11)) (clojure.core/list (quote x__10)))) ctr=12 t8[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (quote quote)) (clojure.core/list (flint.reader/syntax-quoted zz))))
+t1[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (flint.reader/syntax-quoted a)) (clojure.core/list b) c)) t2[0]=(clojure.core/vec (clojure.core/concat (clojure.core/list a) (clojure.core/list 1))) t3[0]=(clojure.core/set (clojure.core/concat (clojure.core/list :x))) t4[0]=(clojure.core/apply clojure.core/hash-map (clojure.core/concat (clojure.core/list :a) (clojure.core/list 2) (clojure.core/list :b) (clojure.core/list 1) (clojure.core/list :c) (clojure.core/list 3))) t5[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (quote if)) (clojure.core/list (flint.reader/syntax-quoted a)) (clojure.core/list (flint.reader/syntax-quoted b)))) t6[0]=(quote .foo) t7[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (quote x__10__auto__)) (clojure.core/list (quote y__11__auto__)) (clojure.core/list (quote x__10__auto__)))) ctr=12 t8[0]=(clojure.core/seq (clojure.core/concat (clojure.core/list (quote quote)) (clojure.core/list (flint.reader/syntax-quoted zz))))
 --expect-why
 DERIVED BY HAND from `readsq.kin`'s algorithm, walking each of the 8 forms
 through `sq-form` the way the source itself does. Every status is `0`
@@ -1380,13 +1380,15 @@ no namespace AND the name starts with `.` -- wraps it `(quote .foo)` with no
 
 t7 `(x# y# x#)`, with the gensym map seeded empty and the counter at 10:
 first `x#` -- `map-get` on the fresh map misses, so a NEW name is minted:
-strip the trailing `#`, append `__` and the CURRENT counter (10) -> `x__10`,
-the map gains `x#` -> `x__10`, and the counter becomes 11. `y#` -- misses
-too, mints `y__11`, counter becomes 12. Second `x#` -- HITS the memo (`x#` ->
-`x__10` from the first), so it reuses that exact symbol and the counter does
+strip the trailing `#`, append `__`, the CURRENT counter (10), and `__auto__`
+(canonical Clojure's own spelling for a syntax-quote auto-gensym, settled
+in `DECISIONS.md#namespaces-over-the-system-port`), giving `x__10__auto__`;
+the map gains `x#` -> `x__10__auto__`, and the counter becomes 11. `y#` -- misses
+too, mints `y__11__auto__`, counter becomes 12. Second `x#` -- HITS the memo (`x#` ->
+`x__10__auto__` from the first), so it reuses that exact symbol and the counter does
 NOT advance. `ctr=12` is the header's claim made checkable: two distinct
 names were minted, not three, so the final `RDS_GENSYM_N` is 10+2=12. Had the
-memo not been consulted, the third item would read `x__12` and `ctr` would
+memo not been consulted, the third item would read `x__12__auto__` and `ctr` would
 print 13.
 
 t8 `(flint.reader/syntax-quoted zz)`: the one source a reader itself would

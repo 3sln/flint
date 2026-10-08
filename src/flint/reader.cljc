@@ -450,7 +450,14 @@
         g (:gensyms @st)]
     (if-let [s (get @g sym)]
       (list 'quote s)
-      (let [s (gensym (str base "__"))]
+      ;; `__auto__`: canonical Clojure's own spelling for a syntax-quote
+      ;; auto-gensym (`clojure.lang.Compiler`'s `registerGensym`), settling the
+      ;; open numbering question in `DECISIONS.md#namespaces-over-the-system-port` --
+      ;; `gensym` here is ALREADY process-wide and never reset per read (a
+      ;; top-level counter on both dialects: `clojure.lang.RT/nextID` under
+      ;; `:default`, `clojure/core.cljc`'s own `gensym-counter` atom under
+      ;; `:flint`), so only the SUFFIX was missing, not the numbering.
+      (let [s (symbol (str (gensym (str base "__")) "__auto__"))]
         (vswap! g assoc sym s)
         (list 'quote s)))))
 

@@ -174,9 +174,20 @@
       bug (sh "./bin/flint" ":src" d ":fn" "ab_cd/main" ":out" "out/cli-nsmunge.wasm")]
   (check-that "ab_cd.cljc declaring (ns ab-cd): resolving the real namespace compiles"
               (zero? (:exit ok)))
+  ;; THE WORDING CHANGED, not the refusal. Through babashka's own `collect`,
+  ;; this reached the ANALYZER's check (`src/flint/analyzer.cljc`, "this
+  ;; source was resolved as namespace ..", `DECISIONS.md#a-source-defines-only-its-own-namespace`)
+  ;; because `collect` had no check of its own. The JVM driver resolves
+  ;; through `flint.project/resolve-project-waves` -- the SAME wave walk every
+  ;; door now goes through -- whose own `take-answer` catches exactly this
+  ;; case one step earlier, before the compiler ever sees the file
+  ;; (`DECISIONS.md#namespaces-over-the-system-port`): "asked for ab_cd,
+  ;; answered with a file declaring ab-cd". Still refused, still naming both
+  ;; symbols; which check gets there first is an implementation detail this
+  ;; test should not pin to one door's history.
   (check-that "the same file resolved as ab_cd (the path, read as a name): refused, naming both"
               (and (not (zero? (:exit bug)))
-                   (str/includes? (:all bug) "resolved as namespace ab_cd")
+                   (str/includes? (:all bug) "ab_cd")
                    (str/includes? (:all bug) "ab-cd"))))
 
 ;; And end to end, through `bin/flint`: a task that PRINTS, a task that returns

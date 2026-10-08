@@ -6,14 +6,16 @@
 ;; compile state. Only what needs no context is decided here -- an auto-gensym
 ;; `x#`, a `.method`, a special form.
 ;;
-;; THE AUTO-GENSYM IS NUMBERED FROM THE READ, not from a process. The guest's
-;; reader called `gensym`, whose counter is the whole process's: the number a
-;; file's `x#` got depended on everything that had run before the file was
-;; read, which is a reader that is not a function of its text. A host-side
-;; reader has no such counter to share, so the read is given its first number
-;; (`rd-new`'s `gensym0`). Whether that is enough -- two files' templates can
-;; now both name `x__1` -- is recorded as open in
-;; `DECISIONS.md#namespaces-over-the-system-port`.
+;; THE AUTO-GENSYM IS NUMBERED FROM THE READ, not from a process -- this
+;; reader owns no counter, unlike the guest's, which calls `gensym` and shares
+;; the whole process's. So the read is given its first number (`rd-new`'s
+;; `gensym0`), and whoever drives this reader has to behave like that shared
+;; counter: never reset it between reads in one process, or two files'
+;; templates could share a name, which is a hygiene hazard when one macro's
+;; expansion is spliced into another's. RESOLVED
+;; `DECISIONS.md#namespaces-over-the-system-port`: canonical Clojure's own
+;; behaviour, `name__N__auto__`, with the HOST (the JVM driver,
+;; `flint.driver.host-reader`) keeping that counter rather than this reader.
 ;;
 ;; A MAP'S ENTRIES ARE SORTED BY `flint.canon/ckey`, a string built the same
 ;; way on every runtime -- doubles by their bits, never by their printing --
@@ -297,6 +299,19 @@
     (let [^I64 k (rd-int rt sti RDS_GENSYM_N)]
       (msg-int rt sk k)
       (rd-set-int rt sti RDS_GENSYM_N (+ k 1)))
+    ;; `__auto__`, so the name is `x__N__auto__` -- CANONICAL CLOJURE'S OWN
+    ;; SPELLING (`clojure.lang.Compiler`'s `registerGensym`/`garg`, and what
+    ;; `(gensym)` itself appends), decided to settle the open question above:
+    ;; not a new convention, Clojure's. `DECISIONS.md#namespaces-over-the-system-port`
+    ;; records the numbering half of that decision.
+    (sink-put rt sk 95)
+    (sink-put rt sk 95)
+    (sink-put rt sk 97)
+    (sink-put rt sk 117)
+    (sink-put rt sk 116)
+    (sink-put rt sk 111)
+    (sink-put rt sk 95)
+    (sink-put rt sk 95)
     (let [^Value text (sink-string rt sk)]
       (sink-close rt sk)
       (let [^Value s (symbol-of rt NIL text)

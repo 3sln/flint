@@ -67,7 +67,7 @@ EOF
 
 # THROUGH THE COMMITTED TOOLS, not inline: a hand-configured one-off encodes
 # decisions the real path lacks.
-bb ./bin/flint :src "$W/src" :fn p/main --emit-spec :out "$W/p.spec" > /dev/null 2>&1 \
+./bin/flint :src "$W/src" :fn p/main --emit-spec :out "$W/p.spec" > /dev/null 2>&1 \
   || fail "bin/flint --emit-spec"
 # THE REFERENCE IS THE WASM COMPILER ON THE SAME SPEC, not the native CLI on the
 # same SOURCES. The CLI builds its own spec, so comparing against its artifact

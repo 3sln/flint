@@ -45,9 +45,14 @@ CARGO = [
 NPM = ["package.json", "deck/package.json", "sdks/cli/package.json",
        "sdks/esm/package.json"]
 # The value that actually reaches a compiled artifact, via `modmeta`. A literal
-# rather than a read of `meta.edn`, because `bin/flint` has to work from a
-# distribution that carries no repo.
-FLINT = "bin/flint"
+# rather than a read of `meta.edn`, because the bootstrap driver has to work
+# from a distribution that carries no repo. `bin/flint` is a thin `sh` wrapper
+# now (`DECISIONS.md#namespaces-over-the-system-port` migration step 1.2); the
+# fallback itself moved with the Clojure logic to `driver/flint/driver/main.clj`
+# -- found as "no FLINT_VERSION fallback found -- the pattern moved" the first
+# time `bin/check-version` ran after that move, which is exactly what the
+# message is for.
+FLINT = "driver/flint/driver/main.clj"
 # AND THE LOCKFILE, which states a version for every workspace member and was
 # the hole in the first version of this gate: `bin/check-version` went green
 # while `Cargo.lock` still pinned `flint-cli` and `flint-native-abi` at 0.0.1.
