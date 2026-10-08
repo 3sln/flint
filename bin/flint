@@ -20,7 +20,18 @@
 # first); see the commit introducing this file for the before/after a real
 # build does with it.
 set -e
-cd "$(dirname "$0")/.."
+# ROOT, NOT A `cd`. `flint task`/`flint build` read a "deps.edn" in the
+# CURRENT DIRECTORY as the caller's own project -- `test/cli.clj` starts this
+# script with its working directory set to a temp project precisely so that
+# lookup finds THAT project's tasks, and babashka's own `*file*`-derived
+# `root` never touched the process's cwd to get there. A `cd "$(dirname
+# "$0")/.."` here would silently run every task against THIS repo's own
+# deps.edn instead of the caller's -- found as "no such task: greet" once the
+# deps.edn/`-Sdeps` fix below stopped that scenario from failing one step
+# earlier, which is what let this one show up at all. `ROOT` is computed in a
+# SUBSHELL so it cannot change this shell's own directory as a side effect.
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+export FLINT_ROOT="$ROOT"
 
 JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
 if [ ! -x "$JDK/bin/java" ]; then
@@ -37,21 +48,52 @@ if ! command -v clojure > /dev/null 2>&1; then
   exit 1
 fi
 
-# NO deps.edn FILE AT THE REPO ROOT, DELIBERATELY. `flint.cli`/`flint.deps`
-# (lib/flint/cli.cljc, lib/flint/deps.cljc) read a "deps.edn" in the CURRENT
-# DIRECTORY as a flint PROJECT's own manifest -- `:paths`/`:deps` are the
-# same keys Clojure's own tool uses, on purpose, for a familiar shape. A
-# tracked root `deps.edn` giving the JVM its classpath is therefore also a
-# flint project manifest declaring Maven dependencies this repo does not
-# otherwise have, and `bin/flint task`/`build`/`deps`, run from the repo root
-# (as several `test/cli.clj` scenarios do), read it as exactly that: found
-# when `cheshire`/`org.clojure/data.xml` -- below, needed only so THIS JVM can
-# load `lib/flint/deps/manifest.cljc`'s `:clj` branch -- turned up as flint
-# dependencies to fetch, one of them pulling in a transitive
-# `com.fasterxml.jackson.core/jackson-databind` with no pinned version, and
-# "flint cannot fetch everything this project reaches" where a clean build
-# was expected. `-Sdeps` hands tools.deps the same EDN on the command line
-# instead, so there is no file for `flint.cli` to misread as its own.
+# NO deps.edn FILE AT THE REPO ROOT, DELIBERATELY, AND NOT EVEN `-Sdeps` AT
+# INVOCATION TIME -- a classpath STRING (`-Scp`), computed once and cached.
+# Two separate collisions, found in that order:
+#
+# (1) `flint.cli`/`flint.deps` (lib/flint/cli.cljc, lib/flint/deps.cljc) read
+#     a "deps.edn" in the CURRENT DIRECTORY as a flint PROJECT's own manifest
+#     -- `:paths`/`:deps` are the same keys Clojure's own tool uses, on
+#     purpose, for a familiar shape. A tracked root `deps.edn` giving the JVM
+#     its classpath is therefore ALSO a flint project manifest declaring
+#     Maven dependencies this repo does not otherwise have, and `bin/flint
+#     task`/`build`/`deps`, run from the repo root (as several `test/cli.clj`
+#     scenarios do), read it as exactly that: `cheshire`/`org.clojure/data.xml`
+#     below -- needed only so THIS JVM can load
+#     `lib/flint/deps/manifest.cljc`'s `:clj` branch -- turned up as flint
+#     dependencies to fetch, one of them pulling in a transitive
+#     `com.fasterxml.jackson.core/jackson-databind` with no pinned version,
+#     and "flint cannot fetch everything this project reaches" where a clean
+#     build was expected.
+# (2) `-Sdeps` on the command line (tried first, after (1)) does not avoid
+#     this -- it ADDS to the normal deps.edn chain (root, user, PROJECT),
+#     rather than replacing it, and `flint task`/`flint build` run with their
+#     cwd set to a CALLER's project directory (deliberately -- see `ROOT`
+#     above). `clojure` still reads THAT project's own "deps.edn" as ITS
+#     project file and tries to build a classpath from it: a `test/cli.clj`
+#     fixture deliberately declaring `{:weird/coord "x"}` (to check flint's
+#     OWN resolver names it) made `clojure` itself die first, with "Error
+#     building classpath. Coord of unknown type", before this driver ever
+#     started. `-Scp` takes a classpath already computed, and resolves no
+#     deps.edn at all, anywhere, so there is no file left for either `clojure`
+#     or `flint.cli` to misread as a project of its own.
+#
+# The classpath is computed ONCE (`clojure -Spath`, cwd forced to `$ROOT` in
+# a subshell so THAT computation cannot hit a caller's bad deps.edn either)
+# and cached at `target/flint-driver.cp`, invalidated by comparing the first
+# line against `DEPS_EDN` below -- so editing the Maven coordinates here
+# recomputes it, and nothing else does.
+DEPS_EDN="{:paths [\"$ROOT/src\" \"$ROOT/driver\" \"$ROOT/lib\"]
+           :deps {cheshire/cheshire {:mvn/version \"5.13.0\"}
+                  org.clojure/data.xml {:mvn/version \"0.2.0-alpha9\"}}}"
+CPFILE="$ROOT/target/flint-driver.cp"
+mkdir -p "$ROOT/target"
+if [ ! -f "$CPFILE" ] || [ "$(head -1 "$CPFILE")" != "$DEPS_EDN" ]; then
+  CP=$(cd "$ROOT" && clojure -Sdeps "$DEPS_EDN" -Spath)
+  { printf '%s\n' "$DEPS_EDN"; printf '%s\n' "$CP"; } > "$CPFILE"
+fi
+CP=$(tail -1 "$CPFILE")
 #
 # STDERR IS FILTERED, not piped straight through (and not `exec`ed, for the
 # same reason): loading `flint.rt`, `flint.reader`, `flint.macros` and
@@ -74,10 +116,7 @@ fi
 # `grep`'s -- captured before the filter runs, and returned after it.
 set +e
 tmperr=$(mktemp "${TMPDIR:-/tmp}/flint-stderr.XXXXXX")
-clojure -Sdeps '{:paths ["src" "driver" "lib"]
-                 :deps {cheshire/cheshire {:mvn/version "5.13.0"}
-                        org.clojure/data.xml {:mvn/version "0.2.0-alpha9"}}}' \
-        -M -m flint.driver.main "$@" 2>"$tmperr"
+clojure -Scp "$CP" -M -m flint.driver.main "$@" 2>"$tmperr"
 status=$?
 grep -v '^WARNING: ' "$tmperr" >&2
 rm -f "$tmperr"
