@@ -1,0 +1,101 @@
+#!/bin/sh
+# The units spike, end to end (`DECISIONS.md#composing-runtime-units`):
+# build the runtime units as separate PRE-PLACED wasm modules, run real
+# programs on them from node, and print every figure the decision cites.
+#
+# Needs the PRODUCTION units (`bin/build-units`), a current `dist/` and
+# `target/release/flint` (AGENTS.md sec. 3), and JAVA_HOME for `bin/flint`.
+#   bench/units-spike/run            everything
+#   SKIP_TIMING=1 bench/units-spike/run
+set -e
+cd "$(dirname "$0")/../.."
+OUT=out/units-spike
+H=bench/units-spike
+mkdir -p "$OUT/progs" "$OUT/calls"
+[ "$(cat units/.build-mode 2>/dev/null)" = production ] || { echo "units/ is not a production build"; exit 1; }
+[ -x target/release/flint ] || { echo "no target/release/flint"; exit 1; }
+
+NIGHTLY="$(cat bin/nightly-toolchain)"
+RUSTC="$(rustup which --toolchain "$NIGHTLY" rustc)"
+DEPS=target/wasm32-unknown-unknown/release/deps
+metalib() { m=$(ls "$DEPS"/lib$1-*.rmeta 2>/dev/null | head -1); if [ -n "$m" ]; then echo "$m"; else ls "$DEPS"/lib$1-*.rlib | head -1; fi; }
+# The flags bin/build-units uses, plus ONE: position-independent code, so a
+# reference into another unit's DATA becomes an importable GOT.mem global.
+FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 $(./bin/rust-remap-flags) -C relocation-model=pic"
+
+echo "==> the hazard PIC answers: the non-PIC conc.o linked on its own"
+if node -e "
+  import('./$H/common.mjs').then(({lld, sysroot, provides, unitExports}) => {
+    const e = 'units/flint/conc.unit.edn', exps = [...Object.values(provides(e)), ...unitExports(e)].map((s) => '--export=' + s);
+    try { lld(['--no-entry','--import-memory','--import-table','--import-undefined','--gc-sections',...exps,
+               '-o','$OUT/conc-nonpic.wasm','units/flint/conc.o',...sysroot()]); console.log('    linked (unexpected)'); }
+    catch (e) { console.log('    ' + e.message.split('\n').filter(Boolean)[0].replace(/^.*: undefined/, 'undefined')); process.exit(3); } })"
+then :; else echo "    (expected: a data symbol cannot be imported from a non-PIC object)"; fi
+
+echo "==> PIC unit objects"
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_conc --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
+  --emit=obj units-src/flint-conc/src/lib.rs -o $OUT/conc-pic.o 2>/dev/null
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_data_json --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
+  --extern serde="$(metalib serde)" --extern serde_json="$(metalib serde_json)" \
+  --emit=obj units-src/flint-data-json/src/lib.rs -o $OUT/json-pic.o 2>/dev/null
+
+echo "==> pre-placed unit modules"
+node $H/build-units.mjs | sed 's/^/    /'
+
+echo "==> programs: the shipped door (shaken) and bin/flint (linked)"
+mkdir -p $OUT/src/triv $OUT/src/json
+printf '(ns t) (defn main [_] "hi")\n' > $OUT/src/triv/t.cljc
+cat > $OUT/src/json/j.cljc <<'CLJ'
+(ns j (:require [flint.data.json :as json]))
+(defn main [_]
+  (let [doc (json/read-str "{\"a\": [1, 2, 3.5, {\"b\": null, \"c\": \"x\"}], \"d\": true}")]
+    (str (get-in doc ["a" 3 "c"]) " " (count (get doc "a")) " " (json/write-str (get doc "a")))))
+CLJ
+PROGS="triv:$OUT/src/triv:t: nqueens:corpus:nqueens: words:corpus:words: lzw:corpus:lzw: sudoku:corpus:sudoku: json:$OUT/src/json:j:flint.data.json"
+# REUSE_PROGS=1 keeps the modules from a previous run -- only for re-running
+# the later stages against an unchanged tree.
+[ -n "$REUSE_PROGS" ] || for p in $PROGS; do
+  name=${p%%:*}; rest=${p#*:}; dir=${rest%%:*}; rest=${rest#*:}; ns=${rest%%:*}
+  ./target/release/flint compile :path "$dir" :fn "$ns/main" :to :wasm :out $OUT/progs/$name.shaken.wasm > /dev/null 2>&1
+  ./bin/flint :src "$dir" :fn "$ns/main" :out $OUT/progs/$name.linked.wasm > /dev/null 2>&1
+done
+
+echo "==> each program, composed from units, against the shipped module"
+fails=0
+for p in $PROGS; do
+  name=${p%%:*}; rest=${p#*:}; rest=${rest#*:}; ns=${rest%%:*}; units=${rest#*:}
+  want=$(node host/flint.mjs $OUT/progs/$name.shaken.wasm "$ns/main")
+  got=$(node $H/compose.mjs $OUT/progs/$name.shaken.wasm "$ns/main" "flint.conc${units:+,$units}" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).out))')
+  if [ "$want" = "$got" ]; then echo "    ok   $name: $(printf '%s' "$got" | head -c 60)"; else echo "    FAIL $name"; fails=$((fails+1)); fi
+done
+echo "    and without the json unit, the json program is REFUSED, not trapped:"
+node $H/compose.mjs $OUT/progs/json.shaken.wasm j/main flint.conc 2>&1 | grep -o 'Error: no unit provides.*' | head -1 | sed 's/^/      /'
+
+echo "==> sizes"
+PROGRAMS='[{"name":"triv"},{"name":"nqueens"},{"name":"words"},{"name":"lzw"},{"name":"sudoku"},{"name":"json","units":["flint.data.json"]}]' \
+  node $H/measure.mjs
+
+if [ -z "$SKIP_TIMING" ]; then
+  echo "==> timing ($(uptime | sed 's/.*load/load/'))"
+  CLANG=""
+  for c in /opt/homebrew/opt/llvm/bin/clang clang; do
+    if $c --target=wasm32 -c -x c /dev/null -o /dev/null 2>/dev/null; then CLANG=$c; break; fi
+  done
+  if [ -n "$CLANG" ]; then
+    $CLANG --target=wasm32 -O2 -c $H/calls/b.c -o $OUT/calls/b.o
+    $CLANG --target=wasm32 -O2 -c $H/calls/a.c -o $OUT/calls/a.o
+    $CLANG --target=wasm32 -O2 -DSINGLE -c $H/calls/a.c -o $OUT/calls/a1.o
+    node -e "
+      import('./$H/common.mjs').then(({lld}) => {
+        const o='$OUT/calls';
+        lld(['--no-entry','--import-memory','--import-table','--table-base=100','--global-base=65536',o+'/b.o','-o',o+'/b.wasm']);
+        lld(['--no-entry','--import-memory','--import-table','--import-undefined','--global-base=131072',o+'/a.o','-o',o+'/a.wasm']);
+        lld(['--no-entry',o+'/a1.o','-o',o+'/a1.wasm']); })"
+    node $H/calls/run.mjs $OUT/calls | sed 's/^/    /'
+  else
+    echo "    no clang with a wasm32 target; call overhead skipped"
+  fi
+  for p in nqueens lzw; do node $H/time.mjs $OUT/progs/$p.shaken.wasm $p/main 5 | sed 's/^/    /'; done
+  node $H/time.mjs $OUT/progs/triv.shaken.wasm t/main 15 | sed 's/^/    /'
+fi
+[ "$fails" -eq 0 ]
