@@ -445,10 +445,12 @@
 
 (defn core-first
   "`clojure.core` is referred by every namespace, so it is analysed first
-  whatever the require graph says. `flint.check` follows it for the same reason
-  and with one addition: `expect` is a MACRO, and a macro has to be compiled
-  before the namespace that expands it is analysed. Nothing `:require`s
-  `flint.check`, so the graph has no edge to order by and this supplies one."
+  whatever the require graph says. `flint.check` follows it for the same
+  reason -- it is now an UNCONDITIONAL root (`DECISIONS.md#checks`) -- and
+  with one addition: `expect` is a MACRO in both of its variants, and a macro
+  has to be compiled before the namespace that expands it is analysed.
+  Nothing `:require`s `flint.check`, so the graph has no edge to order by and
+  this supplies one."
   [order]
   ;;
   ;; `flint.protocols` FOLLOWS, and for a measured reason rather than a
@@ -495,19 +497,13 @@
 
 (defn project-roots
   "Where a compile starts reading: `roots*` or the entry with `clojure.core`,
-  plus, when checks are on, `flint.check`. One function
+  plus `flint.port`, `flint.wire` and `flint.check`, always. One function
   for every walk, so no two can start from different places."
   [entry-ns features roots*]
   ;; `clojure.core` is a root, not something the graph reaches: every namespace
   ;; refers it implicitly and almost none of them `:require` it, so starting
   ;; only from the entry collects a program whose `str` resolves to nothing.
   ;;
-  ;; `flint.check` is a root for the same reason and only when checks are on
-  ;; (`DECISIONS.md#checks`). A module writes `#?(:flint/check (expect ...))`
-  ;; without requiring anything, because the branch does not exist in a build
-  ;; where the namespace does not either -- so there is nothing to require and
-  ;; nothing left behind. Under `:optimize [perf]` this root is simply not
-  ;; added, and `flint.check` is not in the program at all.
   ;; `flint.system` IS NOT A ROOT ANY MORE. It was the control plane, added
   ;; here and in every other door because nothing referenced it; the control
   ;; plane is the RUNTIME's now, and the call loop is compiled from
@@ -520,9 +516,25 @@
   ;; Call serving is always on (the maintainer's decision), so this is the
   ;; ordinary require graph, not an injection -- a resolver that cannot answer
   ;; `flint.port` reports it missing like any other unresolved require.
+  ;;
+  ;; `flint.check` IS A ROOT UNCONDITIONALLY TOO, as of the maintainer's
+  ;; revision (`DECISIONS.md#checks`): the namespace itself always exists, in
+  ;; one of two compiler-injected variants chosen by whether `:flint/check` is
+  ;; in `features` -- the real implementation when it is, and an ON-shaped but
+  ;; inert stand-in (no-op macros, throwing functions) when it is not. That is
+  ;; what lets a program name `flint.check/expect` or `flint.check/run-tests`
+  ;; with no `#?(:flint/check ...)` wrapper and no `:require`, in EITHER build:
+  ;; the old design made the namespace vanish entirely under `:optimize
+  ;; [perf]`, which meant code could only reach it from inside a reader
+  ;; conditional, and this root addition was itself conditional on the same
+  ;; feature. Both of those are gone -- `flint.check` is a root the same way
+  ;; `flint.port`/`flint.wire` are, and `features` only selects WHICH source
+  ;; the single `flint.check.cljc` resolves to via its own internal
+  ;; `#?(:flint/check A :default B)` branches (`DECISIONS.md#namespaces-over-the-system-port`
+  ;; §4), the same deferred-`#?` mechanism every other stdlib file already
+  ;; uses -- not whether the namespace is requested at all.
   (let [given (vec (or roots* ['clojure.core entry-ns]))]
-    (cond-> (into given '[flint.port flint.wire])
-      (contains? features :flint/check) (conj 'flint.check))))
+    (into given '[flint.port flint.wire flint.check])))
 
 (defn- finish-project
   "What both walks answer once every namespace is collected: the order already

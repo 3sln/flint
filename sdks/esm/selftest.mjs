@@ -507,15 +507,14 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
 // --- stdextra omitted --------------------------------------------------------
 //
 // `clojure.core` is stdcore, so a resolver with no `stdextra()` still compiles a
-// program written in it. CHECKS ARE THE ONE CATCH, found porting this file:
-// they are on by default, which makes `flint.check` a root of every compile
-// (`flint.project/project-roots`), and `flint.check` is in stdextra -- so the
-// first program below fails with "no source for flint.check" unless it says
-// `checks: false`. Roots are hard as built; the decision's "a not-found answer
-// is not an error in itself" is its unbuilt design for optional roots
-// (`DECISIONS.md#namespaces-over-the-system-port`, "Roots"). So the failure is
-// asserted as what it is, with the sentence that says why, and the omission
-// that is legitimate today is asserted beside it.
+// program written in it. `flint.check` is stdcore too now (the maintainer's
+// revision, `DECISIONS.md#checks`): it moved out of stdextra because it is
+// meant to ALWAYS exist, a root unconditionally like `flint.port`/`flint.wire`,
+// picking one of its two internal variants per compile rather than vanishing
+// under `:optimize [perf]`. So, unlike before this revision, checks being ON
+// is no longer a reason a no-`stdextra()` compile needs `checks: false` --
+// that case is asserted directly below, next to the one `clojure.set` (a true
+// stdextra namespace) still needs it for.
 {
   const filesD1 = { 'stdxapp.cljc': '(ns stdxapp) (defn go [] (vec (map str [1 2 3])))' };
   const sb = await (await compiler.compile({
@@ -524,13 +523,15 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
   eq('with no stdextra() and checks off, clojure.core is all there (str, map, vec)',
      await sb.call('stdxapp/go'), ['1', '2', '3']);
 
-  let errD0 = null;
-  try { await compiler.compile({ resolve: fromMap(filesD1), fn: 'stdxapp/go' }); }
-  catch (e) { errD0 = e; }
-  ok('with checks ON and no stdextra(), flint.check is missing -- and the error says why',
-     errD0 && errD0.errors?.some((e) => e[':kind'] === ':missing' && e[':ns'] === 'flint.check')
-       && /checks: false/.test(errD0.message),
-     errD0 ? errD0.message : 'it compiled');
+  // CHECKS ON, STILL NO `stdextra()` AT ALL: this used to throw "no source for
+  // flint.check" (588f2980), because flint.check lived in stdextra. It is
+  // stdcore now, so the identical program with no `resolve` fallback beyond
+  // `fromMap` simply compiles.
+  const sb2 = await (await compiler.compile({
+    resolve: fromMap(filesD1), fn: 'stdxapp/go', exports: ['stdxapp/go'],
+  })).sandbox();
+  eq('and with checks ON and no stdextra() at all, it compiles too -- flint.check is stdcore now',
+     await sb2.call('stdxapp/go'), ['1', '2', '3']);
 
   const filesD2 = { 'stdxapp2.cljc': '(ns stdxapp2 (:require [clojure.set :as set])) (defn go [] (set/union #{1} #{2}))' };
   let errsD2 = null;
@@ -539,6 +540,73 @@ ok('no optimize at all is the interpreter', (await sizeOf([])) === small, 'it co
   ok('and a program requiring clojure.set, still without stdextra, reports it :missing',
      Array.isArray(errsD2) && errsD2.some((e) => e[':kind'] === ':missing' && e[':ns'] === 'clojure.set'),
      JSON.stringify(errsD2));
+}
+
+// --- flint.check with no #? wrapper, in both builds ---------------------------
+//
+// The whole point of the revision: a BARE `(flint.check/expect pred x)`, with
+// no `#?(:flint/check ...)` around it and no `:require [flint.check]`,
+// compiles in a checked build (and really checks) AND in an unchecked one
+// (and costs nothing). The argument is a call with a visible side effect --
+// bumping an atom -- so "checked" and "inlined away to nil, argument
+// discarded" are told apart by whether the bump happened, not just by `expect`'s
+// own return value.
+{
+  const src = '(ns barecheck.app)\n' +
+    '(def counter (atom 0))\n' +
+    '(defn bump [] (swap! counter inc) true)\n' +
+    '(defn go [] [(flint.check/expect (fn [x] x) (bump)) @counter])\n';
+  const files = { 'barecheck/app.cljc': src };
+
+  const sbOn = await (await compiler.compile({
+    resolve: chain(stdextra(), fromMap(files)), fn: 'barecheck.app/go',
+  })).sandbox();
+  eq('checks ON: a bare flint.check/expect still checks, and evaluates its argument once',
+     await sbOn.call('barecheck.app/go'), [true, 1]);
+
+  const sbOff = await (await compiler.compile({
+    resolve: chain(stdextra(), fromMap(files)), fn: 'barecheck.app/go', checks: false,
+  })).sandbox();
+  eq('checks OFF: the same bare call expands to nil -- the argument (the bump) never runs',
+     await sbOff.call('barecheck.app/go'), [null, 0]);
+}
+
+// --- the OFF variant's throwing half -------------------------------------------
+//
+// `run-tests` only makes sense while actually running checks, so its OFF
+// variant throws a clear, named message rather than no-opping.
+{
+  const files = { 'runoff/app.cljc': '(ns runoff.app) (defn go [] (flint.check/run-tests []))' };
+  let threw = null;
+  try {
+    const sb = await (await compiler.compile({
+      resolve: chain(stdextra(), fromMap(files)), fn: 'runoff.app/go', checks: false,
+    })).sandbox();
+    await sb.call('runoff.app/go');
+  } catch (e) { threw = e; }
+  ok('checks OFF: flint.check/run-tests throws, naming why',
+     threw != null && /checks are not enabled in this build/.test(String(threw.message ?? threw)),
+     threw ? String(threw.message ?? threw) : 'it did not throw');
+}
+
+// --- a hostile resolver cannot answer flint.check, on or off -------------------
+//
+// stdcore's "answered first, never asked of the resolver" guarantee applies to
+// `flint.check` exactly as it does to `clojure.core` (the test above this
+// file's original hostile-stdcore block), checked here in BOTH builds since
+// which variant resolves is a `features` question and this is a resolver-
+// priority question -- orthogonal, and both need checking.
+for (const checks of [true, false]) {
+  const calls = [];
+  const hostile = (ns) => { calls.push(String(ns)); return null; };
+  const files = { 'notcheckedapp.cljc':
+    '(ns notcheckedapp) (defn go [] (flint.check/test-var? {:flint.check/test true}))' };
+  const resolve = chain(hostile, stdextra(), fromMap(files));
+  const sb = await (await compiler.compile({ resolve, fn: 'notcheckedapp/go', checks })).sandbox();
+  eq(`checks ${checks}: flint.check/test-var? is still the real one (stdcore wins over a resolver)`,
+     await sb.call('notcheckedapp/go'), true);
+  ok(`checks ${checks}: the resolver was never asked for flint.check`,
+     !calls.includes('flint.check'), JSON.stringify(calls));
 }
 
 // --- the bundle split: stdextra's bytes are not in the core bundle -----------

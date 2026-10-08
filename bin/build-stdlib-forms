@@ -13,11 +13,28 @@
 // WHICH NAMESPACES ARE STDCORE IS ASKED OF THE COMPILER, not listed. stdcore is
 // "every namespace an image needs whatever the host supplies", which is exactly
 // what the compiler requests when it compiles a program that requires nothing:
-// this compiles one, `:target :image`, under `[perf]`'s features (no
-// `:flint/check`, which is a build choice and not a need), answering every
-// request from all of `lib/`, and takes the answered names minus the probe's own.
-// A ninth namespace pulled into the closure, or one dropped from it, moves here
-// with no list to edit.
+// this compiles one, `:target :image`, under `[perf]`'s features, answering
+// every request from all of `lib/`, and takes the answered names minus the
+// probe's own. A ninth namespace pulled into the closure, or one dropped from
+// it, moves here with no list to edit.
+//
+// `flint.check` LANDS IN STDCORE BY THIS SAME MEASUREMENT, not by a special
+// case here -- it does not need one. `flint.project/project-roots` makes it a
+// root UNCONDITIONALLY now, the same way it already does `flint.port` and
+// `flint.wire` (`DECISIONS.md#checks`), so the probe below reaches it even
+// though the probe's own features are `[perf]`'s (no `:flint/check`): the
+// embedded compiler that runs this probe is built from the SAME `src/` this
+// decision lives in, so the measurement and the fact it measures move
+// together by construction, which is the whole point of asking the compiler
+// rather than listing. What differs between a checked and an unchecked build
+// is never WHETHER `flint.check` resolves -- it always does, from this one
+// stdcore answer, before any host resolver is asked -- but which of its two
+// internal variants each of its public names picks, via the ordinary
+// `#?(:flint/check A :default B)` on each one (deferred here exactly like
+// every other `#?` in the stdlib, resolved per compile rather than per
+// read). There is deliberately no third blob: a `dist/stdcheck.forms` would
+// hold the exact one answer stdcore already carries, under a second name a
+// reader would have to learn is not actually a separate case (AGENTS.md §1).
 //
 //     bin/build-stdlib-forms            (bin/build-dist runs it)
 import fs from 'node:fs';
