@@ -131,9 +131,12 @@ EOF
 PROGS="arith colls hof strs handler deep park"
 
 echo "  the archive an emitted module links against"
-# Remapped for the reason `bin/build-cli` is (DECISIONS.md#reproducible-build-paths).
-export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
-cargo build --release -p flint-native-abi > /tmp/flint-llvm-cargo.log 2>&1 \
+# Remapped and location-detail-stripped for the reason `bin/build-cli` is
+# (DECISIONS.md#reproducible-build-paths): this archive is what a `:to :llvm`
+# artifact links against. `-Zlocation-detail=none` is unstable, so this runs
+# through `bin/cargo-wasm`, which resolves the pinned nightly.
+export RUSTFLAGS="$(./bin/rust-release-flags) ${RUSTFLAGS:-}"
+./bin/cargo-wasm build --release -p flint-native-abi > /tmp/flint-llvm-cargo.log 2>&1 \
   || { tail -20 /tmp/flint-llvm-cargo.log; fail "cargo build -p flint-native-abi"; }
 
 for n in $PROGS; do

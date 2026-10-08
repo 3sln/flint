@@ -1,5 +1,8 @@
 #!/bin/sh
-# SHIPPED ARTIFACTS MUST NOT EMBED THIS CHECKOUT'S OWN PATH, OR $HOME.
+# SHIPPED ARTIFACTS MUST NOT EMBED THIS CHECKOUT'S OWN PATH, OR $HOME, OR --
+# for a RELEASE build -- ANY Rust source path at all: not just this
+# checkout's own (the remap), the file/line/column itself, which
+# `-Zlocation-detail=none` drops entirely (`bin/rust-release-flags`).
 # (DECISIONS.md#reproducible-build-paths)
 #
 # A regression here is invisible everywhere else: the artifact still loads
@@ -43,10 +46,24 @@ check() {
     echo "  FAIL $f embeds \$HOME/.cargo: $HOME/.cargo"
     fail=1
   fi
+  # ANY EMBEDDED RUST SOURCE PATH, not just this checkout's: a release
+  # build's panic!/unwrap()/assert! machinery is absent entirely
+  # (`-Zlocation-detail=none`), so no FILE PATH at all should remain --
+  # `bin/check-rs-paths.py`'s own header explains why this needs more than a
+  # grep (a naive version of it "passed" against a planted doc-comment
+  # mention, and failed to catch a one-character-short match past a
+  # negative lookbehind, both found by running it rather than reading it).
+  hits="$(python3 "$ROOT/bin/check-rs-paths.py" "$f" || true)"
+  if [ -n "$hits" ]; then
+    echo "  FAIL $f embeds a Rust source path:"
+    echo "$hits" | sed 's/^/    /'
+    fail=1
+  fi
 }
 
 for f in dist/flint-runtime.wasm dist/flint-runtime-aot.wasm dist/flint-loader.wasm \
-         dist/flintc.wasm dist/flintc.bytecode target/release/flint; do
+         dist/flintc.wasm dist/flint-reader.wasm dist/flintc.bytecode \
+         target/release/flint target/release/libflint.a; do
   [ -f "$f" ] && check "$f"
 done
 

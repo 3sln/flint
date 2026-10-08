@@ -4,6 +4,14 @@
 #
 # PINNED (DECISIONS.md#pin-the-nightly-toolchain), same reason and same value
 # as bin/build-units.
+#
+# ALSO the one place that resolves a nightly `cargo`+`rustc` pair for the
+# NATIVE release build sites that need `-Zlocation-detail=none`
+# (`bin/rust-release-flags`, DECISIONS.md#reproducible-build-paths) but have
+# no other reason to leave stable cargo: `bin/build-cli`, `sdks/c/build`, and
+# `bin/check-llvm`'s `flint-native-abi` build run their `cargo build` through
+# this script instead of a bare `cargo`, so there is one place that resolves
+# the toolchain rather than three.
 set -e
 NIGHTLY="$(cat "$(dirname "$0")/nightly-toolchain")"
 RUSTC="$(rustup which --toolchain "$NIGHTLY" rustc 2>/dev/null)" || RUSTC=""
@@ -11,5 +19,14 @@ if [ -z "$RUSTC" ]; then
   echo "no $NIGHTLY rustc: rustup toolchain install $NIGHTLY --profile minimal" >&2
   exit 1
 fi
+TC="$(dirname "$(dirname "$RUSTC")")"
 export PATH="$(dirname "$RUSTC"):$PATH"
+# The nightly's own `rust-objcopy`, which cargo's release-profile `strip = true`
+# shells out to, dynamically links against a shared libLLVM at the TOOLCHAIN
+# ROOT's own `lib/` -- the identical fix `bin/build-units` already needs for
+# this same nightly's `rust-lld`. Without it the strip step aborts (SIGABRT,
+# "Library not loaded: @rpath/libLLVM.dylib") and cargo only warns, so a build
+# that skipped this would still "succeed" with an unstripped binary.
+export DYLD_LIBRARY_PATH="$TC/lib:${DYLD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$TC/lib:${LD_LIBRARY_PATH:-}"
 exec cargo "$@"

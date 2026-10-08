@@ -9,11 +9,16 @@ set -e
 cd "$(dirname "$0")/../.."
 
 echo "== building the C ABI"
-# Remapped for the reason `bin/build-cli` is (DECISIONS.md#reproducible-build-paths):
-# this staticlib is what a C/C++ program links, and an unremapped build
-# embeds the checkout path of whoever ran it into that program.
-export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
-cargo build --release -p flint-c
+# Remapped and location-detail-stripped for the reason `bin/build-cli` is
+# (DECISIONS.md#reproducible-build-paths): this staticlib is what a C/C++
+# program links, and an unflagged build embeds the checkout path of whoever
+# ran it, and every panic!/unwrap()/assert! location in it, into that program.
+# `-Zlocation-detail=none` is unstable, so this runs through `bin/cargo-wasm`,
+# which resolves the pinned nightly rather than whatever stable cargo is on
+# PATH -- this staticlib has no diagnostics variant, so it always gets the
+# full release flags.
+export RUSTFLAGS="$(./bin/rust-release-flags) ${RUSTFLAGS:-}"
+./bin/cargo-wasm build --release -p flint-c
 
 LIB=target/release
 OUT=target/c-selftest
