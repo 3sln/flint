@@ -9,7 +9,7 @@
 ;; (B == C).
 (babashka.classpath/add-classpath "src")
 (require '[flint.compiler.core :as compiler] '[flint.compiler.image :as img] '[flint.compiler.link :as link]
-         '[flint.compiler.reader :as reader] '[flint.compiler.imgread :as imgread]
+         '[flint.compiler.forms :as forms] '[flint.compiler.imgread :as imgread]
          '[flint.compiler.resolve :as project]
          '[clojure.java.io :as io] '[clojure.string :as str]
          '[babashka.fs :as fs])
@@ -19,47 +19,48 @@
 
 (defn ns->path [n] (-> (str n) (str/replace "-" "_") (str/replace "." "/")))
 
-(defn find-source [dirs n]
+;; READ BY THE KIN READER, every file once, in one batch (`test/hostread.clj`):
+;; the compiler reads no text (`DECISIONS.md#one-reader-and-no-other`). This used
+;; to walk the requires itself with `flint.compiler.reader` (`collect`, `topo`);
+;; it goes through the ONE wave walk every door uses now, over a resolver that
+;; answers from the batch.
+(load-file "test/hostread.clj")
+
+(defn source-files [dirs]
+  (for [d dirs
+        f (file-seq (io/file d))
+        :when (.isFile f)
+        :let [p (str f)]
+        :when (some #(str/ends-with? p %) [".fln" ".cljc" ".clj"])]
+    p))
+
+(defn read-all-files
+  "Every source file under `dirs`, READ deferred: `{path answer}`."
+  [dirs]
+  (let [paths (vec (source-files dirs))]
+    (zipmap paths (hostread/read-texts (mapv (fn [p] {:file p :text (slurp p) :dialect (hostread/dialect-of p)})
+                                             paths)))))
+
+(defn find-source [read dirs n]
   (some (fn [d] (some (fn [ext]
-                        (let [f (io/file d (str (ns->path n) ext))]
-                          ;; THE DIALECT, as every resolver answers it: `defalias` is
-                          ;; refused in any namespace not answered `:flint`
-                          ;; (`DECISIONS.md#defalias`), and `clojure.core` uses it.
-                          (when (.exists f) {:src (slurp f) :file (str f)
-                                             :dialect (project/dialect-of (str f))})))
+                        (let [p (str (io/file d (str (ns->path n) ext)))]
+                          (when-let [a (get read p)] (assoc a :file p))))
                       ;; Most specific first (`DECISIONS.md#dialects-and-preludes`):
                       ;; a namespace may have both a `.fln` and a `.cljc`.
                       [".fln" ".cljc" ".clj"]))
         dirs))
 
-(defn collect [dirs roots]
-  (loop [todo (vec roots) sources {}]
-    (if-let [n (first todo)]
-      (if (or (contains? sources n) (contains? virtual n))
-        (recur (rest todo) sources)
-        (let [s (or (find-source dirs n) (throw (ex-info (str "no source: " n) {})))
-              forms (reader/read-all (:src s) {:file (:file s) :features #{:flint}})
-              nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
-          (recur (into (vec (rest todo)) (if nsform (compiler/ns-requires nsform) []))
-                 (assoc sources n s))))
-      sources)))
+(def features #{:flint})
 
-(defn topo [sources]
-  (let [deps (into {} (for [[n {:keys [src file]}] sources]
-                        [n (let [forms (reader/read-all src {:file file :features #{:flint}})
-                                 nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
-                             (set (remove virtual (when nsform (compiler/ns-requires nsform)))))]))]
-    ;; `core-first`, the real pin, not `clojure.core` consed on the front: the
-    ;; pin is `flint.core.impl` first now (`DECISIONS.md#four-units`).
-    (project/core-first
-          (identity
-                  (loop [done [] seen #{} pending (vec (keys deps))]
-                    (if (empty? pending)
-                      done
-                      (let [ready (filter #(every? (fn [d] (or (seen d) (not (contains? deps d)))) (deps %)) pending)
-                            ready (if (seq ready) ready [(first pending)])]
-                        (recur (into done ready) (into seen ready)
-                               (vec (remove (set ready) pending))))))))))
+(defn resolve-program
+  "`{:sources :order}` for a program from `roots`, through
+  `flint.compiler.resolve/resolve-project`, answering from `read` and `extra`
+  (`{ns answer}`)."
+  [read dirs roots extra]
+  (let [r (project/resolve-project (fn [n] (or (get extra n) (find-source read dirs n)))
+                                   (first roots) features (vec roots))]
+    (when (seq (:missing r)) (throw (ex-info (str "no source: " (:missing r)) {})))
+    {:sources (:sources r) :order (:order r)}))
 
 (defn builtin-names []
   (into #{} (for [[_ u] (link/discover-units ["units"])
@@ -70,32 +71,31 @@
 ;; compiler's own namespaces -- `lib` used to be the one stdlib root.
 (def dirs ["src" "lib/stdcore" "lib/stdextra" "lib/deps" "cli/lib"])
 (def entry 'flint.compiler.selfhost/main)
-;; `flint.system` WAS A ROOT here, the fourth place that had to say so, because
-;; bootstrap spawned it by NAME. The control plane is the runtime's now and the
-;; call loop is compiled into every image (`DECISIONS.md#the-control-plane-is-the-runtimes`),
-;; so `flint.system` is nothing for a `collect` to miss any more.
-;;
-;; BUT `flint.port` AND `flint.wire` ARE, and this comment's claim that there
-;; was "nothing for a `collect` to miss" was wrong the moment `bc6ddd42` made
-;; them -- not `flint.system` -- the call loop's roots: `flint.compiler.callentry` now
-;; calls `flint.port/send` and `flint.wire/read-from` directly, so
-;; `flint.compiler.resolve/project-roots` adds both unconditionally for every real
-;; compile. This file builds its OWN spec with `collect` instead of going
-;; through `project-roots`, which is why `bin/flint` and `test/visibility.clj`
-;; were updated in that commit and this file, building the exact same shape of
-;; spec, was not: `collect dirs [(symbol (namespace entry)) 'clojure.core]`
-;; happened to still work here because `flint.compiler.selfhost`'s own transitive
-;; requires already reach `flint.port`, but the minimal spec below (`small`)
-;; has no such luck and failed with "unable to resolve flint.port/send -- is
-;; flint.port required?" -- the exact message `project.cljc` predicts for a
-;; resolver that cannot answer it. Added explicitly here so this does not rely
-;; on a transitive require nobody is promising.
-(def sources (collect dirs [(symbol (namespace entry)) 'clojure.core 'flint.port 'flint.wire]))
-(def order (topo sources))
-(def spec {:sources sources :order order :entry entry :builtins (builtin-names)})
+;; THE ROOTS ARE `flint.compiler.resolve/project-roots`'s, because the spec
+;; goes through the real walk now: `flint.port`/`flint.wire` (the call loop's)
+;; and `flint.check` are added there, and `clojure.core` is reached through each
+;; referrer's prelude (`DECISIONS.md#four-units`). This file used to keep its
+;; own root list, and twice it fell behind the real one.
+(def read-files (read-all-files dirs))
+(def program (resolve-program read-files dirs [(symbol (namespace entry))] {}))
+(def sources (:sources program))
+(def order (:order program))
+(def spec {:sources sources :order order :entry entry :builtins (builtin-names) :features features})
+
+(defn spec-edn
+  "`spec` as the EDN a flint-hosted compiler takes: each source READ, its
+  bytes as base64 under `:preread`, never its forms or its text."
+  [spec]
+  (pr-str (update spec :sources
+                  (fn [ss] (into {} (map (fn [[n a]]
+                                           [n (cond-> (dissoc a :forms :src)
+                                                (:preread a)
+                                                (assoc :preread (.encodeToString (java.util.Base64/getEncoder)
+                                                                                 ^bytes (:preread a))))])
+                                         ss))))))
 
 (when (System/getenv "FLINT_DUMP_SPEC")
-  (spit (System/getenv "FLINT_DUMP_SPEC") (pr-str spec)))
+  (spit (System/getenv "FLINT_DUMP_SPEC") (spec-edn spec)))
 
 (defn compile-on-bb []
   (let [r (compiler/compile-image spec)]
@@ -128,7 +128,7 @@
             (.decode (java.util.Base64/getDecoder) ^String (str/trim s)))))
 
 (defn compile-on-flint [module]
-  (let [spec-edn (pr-str spec)
+  (let [spec-edn (spec-edn spec)
         out (run-node module spec-edn)
         lines (str/split-lines out)]
     {:image (b64-decode (first lines))
@@ -215,7 +215,6 @@
         ;; built by hand (rather than through `flint.compiler.resolve/project-roots`,
         ;; which adds both for exactly this reason) must add them itself or
         ;; gen0 refuses the compile with "is flint.port required?".
-        small (collect dirs ['clojure.core 'flint.port 'flint.wire])
         ;; V IS DEAD ON PURPOSE, and the threshold does not care: measured,
         ;; a literal reachable from `main` and one the shake drops break at the
         ;; same size, because the cost is in ANALYSING it and analysis happens
@@ -225,14 +224,14 @@
         ;; runtime entirely.
         app-src (str "(ns app)\n(def V [" (str/join " " (repeat n "1")) "])\n"
                      "(defn main [_] \"hi\")")
-        wide (assoc spec
-                    :sources (assoc small 'app {:src app-src :file "app.cljc"})
-                    :order (vec (concat (topo small) ['app]))
-                    :entry 'app/main)]
+        app (merge {:file "app.cljc"}
+                   (first (hostread/read-texts [{:file "app.cljc" :text app-src :dialect :portable}])))
+        prog (resolve-program read-files dirs ['app] {'app app})
+        wide (assoc spec :sources (:sources prog) :order (:order prog) :entry 'app/main)]
     ;; `run-node` exits non-zero itself if the module hangs or throws, which is
     ;; exactly the failure being guarded against; a blank answer would mean it
     ;; returned without an image.
-    (if (str/blank? (run-node "out/flintc-gen0.wasm" (pr-str wide)))
+    (if (str/blank? (run-node "out/flintc-gen0.wasm" (spec-edn wide)))
       (do (println "  FAIL  a" n "entry literal produced no image") (System/exit 1))
       (println "  ok   " n "entry literal compiles -- the shadow stack has margin")))
 

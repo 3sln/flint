@@ -1048,45 +1048,16 @@
       (check-that (str "an encoded spec compiles the same bytes as an EDN one " (pr-str flags))
                   (str/includes? out "CHECK-SPLIT identical=true")))))
 
-;; --- the standard library arrives PRE-READ, and changes nothing --------------
+;; --- the standard library arrives PRE-READ ----------------------------------
 ;;
-;; The native CLI embeds `lib/` already read by the compiler it ships
-;; (`DECISIONS.md#stdlib-preread`), and the guest uses those forms only when
-;; they were read under the options it would read with. The block above already
-;; holds the BYTES: its EDN arm carries every stdlib file as text -- read from
-;; the source tree, since the binary carries none -- so `identical=true` is
-;; pre-read against read. What it cannot see is the pre-read not being USED --
-;; a compile that read text after all would be correct and merely slow, so it
-;; would pass everything. This is the control: the same compile
-;; with `FLINT_PREREAD=0` must cost several times the instructions, with and
-;; without `:optimize [perf]` (one feature-independent read serves both, and
-;; each resolves its own conditionals). Measured 2026-10-05: words 4.39 M
-;; without, 0.55 M with (0.52 M when the host decoded every file).
-(defn split-steps [flags env]
-  (let [pb (ProcessBuilder.
-            (into-array String (concat ["./target/release/flint" "run" ":path" "corpus"
-                                        ":fn" "words/main"] flags)))]
-    (.put (.environment pb) "FLINT_CHECK_SPLIT" "1")
-    (doseq [[k v] env] (.put (.environment pb) k v))
-    (.redirectErrorStream pb true)
-    (let [pr (.start pb) out (slurp (.getInputStream pr))]
-      (.waitFor pr)
-      (some-> (re-find #"split-steps=(\d+)" out) second parse-long))))
-
-(doseq [flags [[] [":optimize" "[perf]"]]]
-  (let [with (split-steps flags {})
-        without (split-steps flags {"FLINT_PREREAD" "0"})]
-    (check-that (str "the pre-read stdlib is used, not re-read " (pr-str flags)
-                     " (" with " vs " without " steps)")
-                ;; THREE TIMES, not four (2026-10-08, `DECISIONS.md#four-units`):
-                ;; measured words 669 048 with against 2 497 249 without (3.7x), on
-                ;; the branch where `clojure.core`'s vars moved to
-                ;; `flint.core.impl`, which failed the 4x bound. WHY the ratio
-                ;; fell is not measured -- the parent commit's figure was not
-                ;; captured, and the 4.39 M / 0.55 M above is from 2026-10-05.
-                ;; A compile that re-read the library would cost what the arm
-                ;; without the pre-read costs, so 3x still says it was used.
-                (and with without (< (* 3 with) without)))))
+;; There USED to be a row here holding the pre-read to being USED: the same
+;; compile with `FLINT_PREREAD=0`, which sent the library as text for the
+;; compiler to read, had to cost several times the instructions. The compiler
+;; reads no text now (`DECISIONS.md#one-reader-and-no-other`), so there is no
+;; text arm to compare with and nothing that could read the library a second
+;; time: a body that is not bytes is refused by name. Why the ratio that row
+;; measured fell from above 4x to 3.7x before it went is recorded in
+;; `DECISIONS.md#one-reader-and-no-other`, measured.
 
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

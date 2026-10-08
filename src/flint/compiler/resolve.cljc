@@ -21,8 +21,7 @@
   of the two front doors had been taught the concept.
 
   One function, two producers, and nothing here knows which it got."
-  (:require [flint.compiler.reader :as reader]
-            [flint.compiler.forms :as forms]
+  (:require [flint.compiler.forms :as forms]
             [clojure.string :as str]
             [flint.compiler.core :as compiler]
             [flint.compiler.analyzer :as ana]))
@@ -111,48 +110,51 @@
    :dialect (or (:dialect s) (dialect-of (:file s)))})
 
 (defn preread-options
-  "The options a PRE-READ of resolver answer `s` is made under: `read-options`
-  with `:features :any`, because `flint.compiler.reader/read-deferred` keeps reader
+  "The options a DEFERRED read of resolver answer `s` is made under:
+  `read-options` with `:features :any`, because a deferred read keeps reader
   conditionals as data and one read serves every feature set
   (`DECISIONS.md#stdlib-preread`). The rest -- file, tags, dialect -- still
   decides what the text reads as, so it is still the key."
   [s]
   (read-options s :any))
 
-(defn preread
-  "Resolver answer `s`'s source read ahead of its features, as `flint.compiler.forms`
-  bytes: what the native CLI embeds for each standard-library file."
+(defn text-refused
+  "The error for an answer that carries source TEXT: the compiler reads none
+  (`DECISIONS.md#one-reader-and-no-other`). Every host reads with the one
+  kin-generated reader -- `flint_rt::hostread` natively, `dist/flint-reader.wasm`
+  in JavaScript, `Formsenc.readForms` on the JVM and CLR -- and hands over its
+  `flint.forms` bytes."
   [s]
-  (let [opts (preread-options s)]
-    (forms/encode (assoc (reader/read-deferred (:src s) (dissoc opts :features)) :opts opts))))
-
-(defn read-eager
-  "Resolver answer `s`'s source read EAGERLY under `features`, as `flint.compiler.forms`
-  bytes: what a host hands the compiler for user text it has read itself
-  (`DECISIONS.md#namespaces-over-the-system-port`). Its `:opts` are
-  `read-options` and its `:conds` empty, so `read-entry` takes it as read."
-  [s features]
-  (let [opts (read-options s features)]
-    (forms/encode {:opts opts :forms (reader/read-all (:src s) opts) :conds []})))
+  (ex-info (str (or (:file s) "a namespace") " arrived as source text, and the compiler reads no"
+                " text: the host reads it with the kin reader and hands over flint.forms bytes"
+                " (DECISIONS.md#one-reader-and-no-other)")
+           {:file (:file s) :type :reader}))
 
 (defn read-entry
-  "The forms of resolver answer `s`, read under `features`.
+  "The forms of resolver answer `s`, under `features`.
 
-  A PRE-READ answer (`:preread` bytes, `DECISIONS.md#stdlib-preread`) is
-  decoded HERE, when the namespace is reached and not before, and its
-  conditionals resolved for `features` -- once its `:opts` are the ones this
-  read would take apart from features. Pre-read forms read under other options
-  -- another workspace's tags -- are refused, or read from `:src` when the
-  answer has it too: forms read under the wrong options are a different
-  program, never a faster one.
+  The answer arrives READ (`:preread` bytes, the `flint.compiler.forms`
+  encoding), and is decoded HERE, when the namespace is reached and not
+  before, and its conditionals resolved for `features` -- once its `:opts` are
+  the ones this compile would read it under apart from features. Forms read
+  under other options -- another workspace's tags -- are refused: forms read
+  under the wrong options are a different program, never a faster one.
 
   `sink`, optional: passed straight through to `resolve-conditionals`, so a
   caller can collect every matched-nothing conditional across a whole
   project read the same way one file's deferred read already can."
   [s features & [sink]]
+  ;; A FILE THE HOST COULD NOT READ arrives as its read error, and is reported
+  ;; only if the compile REACHES it -- the way it was when the compiler did the
+  ;; reading -- worded and positioned as the reader words it.
+  (when-let [e (:read-error s)]
+    ;; The kin reader's message is WHOLE -- "read error: .. (file:line:col)"
+    ;; for the reader's own -- exactly as the compiler's reader worded it.
+    (throw (ex-info (:message e)
+                    {:type :reader :file (:file s) :line (:line e) :column (:column e)})))
   (if-let [pre (:preread s)]
     (let [d (forms/decode pre)]
-      (cond
+      (if
         ;; Read DEFERRED (the embedded standard library), or read EAGERLY
         ;; under exactly this compile's features -- which is what a host reads
         ;; user text as before answering a namespace request
@@ -161,22 +163,16 @@
         ;; `:conds` is empty and `resolve-conditionals` hands the forms back.
         (or (= (:opts d) (preread-options s))
             (= (:opts d) (read-options s features)))
-        (reader/resolve-conditionals d features (:file s) sink)
-
-        (:src s) (reader/read-all (:src s) (read-options s features))
-
-        :else
+        (forms/resolve-conditionals d features (:file s) sink)
         (throw (ex-info (str (:file s) " arrived pre-read under " (pr-str (:opts d))
                              ", and this compile reads it under " (pr-str (preread-options s))
                              " (DECISIONS.md#stdlib-preread)")
                         {:file (:file s)}))))
-    (reader/read-all (:src s) (read-options s features))))
+    (throw (text-refused s))))
 
 (defn file-answer
   "What `files-resolver` answers for the SOURCE FILE at `path`, which must be
-  in `files`. Apart from the resolver so the pre-read step
-  (`flint.compiler.selfhost/preread`) asks exactly the question a compile asks of each
-  file, and so cannot read it under options the compile would not use."
+  in `files`."
   [files workspaces path]
   (let [w (first (filter (fn [w] (let [pre (:prefix w)]
                                    (or (nil? pre) (= "" pre)
@@ -190,6 +186,7 @@
         body (get files path)
         pre? (map? body)]
     {:src (if pre? (:src body) body) :preread (when pre? (:preread body))
+     :read-error (when pre? (:read-error body))
      ;; THE DIALECT A HOST READ IT UNDER, when it says; the extension otherwise.
      :file path :dialect (or (when pre? (:dialect body)) (dialect-of path))
      :workspace (:name w) :tags (:tags w)
@@ -577,7 +574,7 @@
   protocol\").
 
   It speaks FORMS, not text and not bytes. Whoever implements it has already
-  read each file -- babashka with `flint.compiler.reader` over a directory, the sandboxed
+  read each file -- `bin/flint` with the kin Java reader over a directory, the sandboxed
   compiler's adapter by decoding the `flint.compiler.forms` bytes its host sent
   (`flint.compiler.selfhost/port-resolver`) -- so nothing below this line reads source.
 
@@ -611,10 +608,11 @@
      :workspace (:workspace a)
      :grants (set (:grants a)) :guard (set (:guard a))}
     {:forms (:forms a)
-     ;; The TEXT too, when the resolver had it: a caller that rebuilds the
-     ;; sources field by field from `:src` (`test/shake.clj` does) compiles
-     ;; from it. Unused when `:forms` is present (`flint.compiler.core/read-source`).
-     :src (:src a)
+     ;; THE BYTES too, when the resolver had them: a door that writes the
+     ;; resolved program out as a spec (`bin/flint --emit-spec`) hands the
+     ;; source on READ, since the compiler that takes the spec reads no text
+     ;; (`DECISIONS.md#one-reader-and-no-other`).
+     :preread (:preread a)
      :file (:file a) :dialect (or (:dialect a) (dialect-of (:file a)))
      :workspace (:workspace a) :tags (:tags a)
      :prelude (normalise-prelude (:prelude a))
@@ -779,7 +777,7 @@
                (let [s (resolve-ns n)]
                  (if (or (nil? s) (:virtual s))
                    s
-                   (assoc (dissoc s :preread) :forms (read-entry s features sink)))))
+                   (assoc s :forms (read-entry s features sink)))))
              names))}))
 
 (defn resolve-project

@@ -358,23 +358,21 @@ fn render_workspaces(workspaces: &[WsEntry], out: &mut String) {
 }
 
 /// The files and workspaces a compile of `srcs` needs, before anything
-/// renders them. `nested` and `as_text` are decided by the caller
+/// renders them. `nested` is decided by the caller
 /// (`build_spec_impl` for the EDN-spec path, `resolve::Answers::new` for the
-/// host-driven one) because both read `:flint/nested` and `FLINT_PREREAD`
+/// host-driven one) because both read `:flint/nested`
 /// the same way and neither should decide it twice.
-pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nested: bool, as_text: bool,
+pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nested: bool,
                           read_features: Option<&[String]>)
                -> Result<SpecInputs> {
     // THE STANDARD LIBRARY AS FORMS, one read for every feature set
-    // (`DECISIONS.md#stdlib-preread`). As text only for the test hooks:
-    // `FLINT_PREREAD=0` is how the saving is measured and a suspected
-    // pre-read defect ruled in or out, and the EDN spec has nowhere to put
-    // bytes.
+    // (`DECISIONS.md#stdlib-preread`) -- and never as text: the compiler reads
+    // none (`DECISIONS.md#one-reader-and-no-other`).
     let mut files: BTreeMap<String, Body> = BTreeMap::new();
-    for (p, a, b, r, d) in STDLIB_INDEX {
-        let body = if as_text { Body::Text(stdlib_text(p, *r)?) } else { Body::Forms(&STDLIB_FORMS[*a..*b], d) };
-        files.insert((*p).to_string(), body);
+    for (p, a, b, _, d) in STDLIB_INDEX {
+        files.insert((*p).to_string(), Body::Forms(&STDLIB_FORMS[*a..*b], d));
     }
+    let mut texts: BTreeMap<String, String> = BTreeMap::new();
     // PER ROOT, so each file can be attributed to the workspace that owns it.
     // Reading them all into one map loses which root a file came from, and the
     // paths here are namespace-derived (`acme/thing.cljc`) with no marker to
@@ -401,9 +399,12 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
             mine.insert(key, body);
         }
         owned.push((s.clone(), mine.keys().cloned().collect()));
-        // A project file at a standard-library path REPLACES it, text for
-        // forms, so the two can never be paired.
-        files.extend(mine.into_iter().map(|(k, v)| (k, Body::Text(v))));
+        // A project file at a standard-library path REPLACES it, so the two
+        // can never be paired; it is read below.
+        for k in mine.keys() {
+            files.remove(k);
+        }
+        texts.extend(mine);
     }
     let mut workspaces: Vec<WsEntry> = Vec::new();
     // POD namespaces, if any were declared. A pod's surface is discovered by
@@ -488,50 +489,42 @@ pub(crate) fn spec_inputs(srcs: &[PathBuf], pods: &[(String, Vec<String>)], nest
         }
     }
     // THE HOST READS THE PROJECT (`DECISIONS.md#namespaces-over-the-system-port`,
-    // step 2): each project file read here by the kin reader, under the
-    // compile's features and its own workspace's tags, and handed over as
-    // `flint.compiler.forms` bytes with its dialect beside them. A file this cannot read
-    // -- or whose tag map is not plain symbol pairs -- goes over as TEXT, so the
-    // compiler reads it and reports exactly what it always reported; and only a
-    // file the compile reaches is ever read there. `FLINT_HOST_READ=0` sends
-    // text throughout, which is the A/B for this step.
-    if let Some(features) = read_features {
-        if !std::env::var("FLINT_HOST_READ").is_ok_and(|v| v == "0") {
-            let project: Vec<String> = owned.iter().flat_map(|(_, ps)| ps.iter().cloned()).collect();
-            let total = project.len();
-            let mut read = 0;
-            for path in project {
-                let matched = workspaces.iter().find(|w| {
-                    let prefix = match w {
-                        WsEntry::Virtual { prefix, .. } | WsEntry::Source { prefix, .. } => prefix,
-                    };
-                    prefix.is_empty() || path.starts_with(prefix.as_str())
-                });
-                let tags = match matched {
-                    Some(WsEntry::Source { ws, .. }) => crate::read::tag_pairs(&ws.tags),
-                    _ => Some(Vec::new()),
-                };
-                let Some(tags) = tags else { continue };
-                let Some(Body::Text(text)) = files.get(&path) else { continue };
-                let portable = !path.ends_with(".fln");
-                let how = crate::read::ReadAs { features: Some(features), tags: &tags, portable };
-                if let Ok(bytes) = crate::read::read_forms(&path, text, &how) {
-                    files.insert(path, Body::Read(bytes, if portable { "portable" } else { "flint" }));
-                    read += 1;
-                }
-            }
-            // `FLINT_HOST_READ=report` says how many it read, so an A/B can
-            // tell "read here and identical" from "fell back to text".
-            if std::env::var("FLINT_HOST_READ").is_ok_and(|v| v == "report") {
-                eprintln!("host-read {read} of {total} project files");
-            }
-        }
+    // step 2; `DECISIONS.md#one-reader-and-no-other`): each project file read
+    // here by the kin reader, under the compile's features -- or DEFERRED, when
+    // the caller has none to give, which every compile accepts -- and its own
+    // workspace's tags, and handed over as `flint.forms` bytes with its dialect
+    // beside them. There is no text fallback any more, because the compiler
+    // reads no text. A file that does not read goes over as ITS READ ERROR, and
+    // is reported only if the compile reaches it, as it was when the compiler
+    // did the reading.
+    let feats: Option<Vec<&str>> = read_features.map(|fs| fs.iter().map(|f| f.as_str()).collect());
+    for (path, text) in texts {
+        let matched = workspaces.iter().find(|w| {
+            let prefix = match w {
+                WsEntry::Virtual { prefix, .. } | WsEntry::Source { prefix, .. } => prefix,
+            };
+            prefix.is_empty() || path.starts_with(prefix.as_str())
+        });
+        let tags = match matched {
+            Some(WsEntry::Source { ws, .. }) => match crate::read::tag_pairs(&ws.tags) {
+                Some(t) => t,
+                None => bail!("the :flint/tag-readers that owns {path} is not a map of symbols to symbols"),
+            },
+            _ => Vec::new(),
+        };
+        let portable = !path.ends_with(".fln");
+        let dialect = if portable { "portable" } else { "flint" };
+        let body = match crate::read::read_text(&path, &text, feats.as_deref(), &tags, portable) {
+            Ok(bytes) => Body::Read(bytes, dialect),
+            Err(e) => Body::Unreadable(e.message, e.line, e.column),
+        };
+        files.insert(path, body);
     }
     Ok(SpecInputs { files, workspaces })
 }
 
 /// The features a compile READS under: what it was given, `[perf]`'s set when
-/// checks are stripped, and otherwise `flint.compiler.reader/default-features` -- the
+/// checks are stripped, and otherwise `flint.compiler.forms/default-features` -- the
 /// same three cases `build_spec_impl` renders into the spec.
 pub(crate) fn read_features(features: Option<&[String]>, strip_checks: bool) -> Vec<String> {
     match features {
@@ -560,7 +553,12 @@ fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
     for (k, v) in &files.bodies {
         w.string(k);
         match v {
-            Body::Text(t) => { w.string(t); }
+            Body::Unreadable(m, l, c) => {
+                w.map(1).keyword(None, "read-error").map(3)
+                    .keyword(None, "message").string(m)
+                    .keyword(None, "line").int(*l)
+                    .keyword(None, "column").int(*c);
+            }
             // `{:preread bytes}`, which `flint.compiler.resolve/file-answer` takes apart
             // (`DECISIONS.md#stdlib-preread`).
             // and THE DIALECT it was read under, said rather than derived from
@@ -571,10 +569,20 @@ fn compile_split(c: &mut Program, args: &[&str], files: &SplitFiles)
             Body::Read(b, d) => { w.map(2).keyword(None, "preread").bytes(b).keyword(None, "dialect").keyword(None, d); }
         }
     }
-    for a in args {
-        w.string(a);
-    }
     let fail = |out: String| flint_rt::native::Outcome { code: 1, out };
+    // THE SPEC, the argument after the mode, goes READ: the kin reader turns
+    // the EDN into `flint.forms` bytes here, because the compiler reads no text
+    // (`DECISIONS.md#one-reader-and-no-other`).
+    for (i, a) in args.iter().enumerate() {
+        if i == 1 {
+            match crate::read::read_spec(a) {
+                Ok(b) => { w.bytes(&b); }
+                Err(e) => return fail(format!("the spec does not read: {e}")),
+            }
+        } else {
+            w.string(a);
+        }
+    }
     match c.call(&w.done()) {
         Err(e) => fail(e),
         Ok(bytes) => match flint_rt::codec::parse(&bytes) {
@@ -599,41 +607,35 @@ pub(crate) struct SplitFiles {
     bodies: BTreeMap<String, Body>,
 }
 
-/// One file as the compile receives it: a project's TEXT, or a standard
-/// library file already READ -- its `flint.compiler.forms` bytes, borrowed from the
-/// binary. Which one a path holds is decided where the map is built, so a
-/// project file at a stdlib path replaces the forms rather than being paired
-/// with them.
+/// One file as the compile receives it, ALWAYS READ -- the compiler reads no
+/// text (`DECISIONS.md#one-reader-and-no-other`): a standard-library file's
+/// `flint.forms` bytes, borrowed from the binary; a project file the host read
+/// itself; or a project file that did not read, as its error. Which one a path
+/// holds is decided where the map is built, so a project file at a stdlib path
+/// replaces the forms rather than being paired with them.
 pub(crate) enum Body {
-    Text(String),
     Forms(&'static [u8], &'static str),
     /// A project file the host read itself (`crate::read`), and its dialect.
     Read(Vec<u8>, &'static str),
+    /// A project file the kin reader refused: the message (whole, as the
+    /// reader words it), line and column,
+    /// reported by the compiler only if it reaches the namespace.
+    Unreadable(String, i64, i64),
 }
 
-/// The text of standard-library file `path`, FROM THE SOURCE TREE this binary
-/// was built from -- the binary carries the library's forms and not its text
-/// (`DECISIONS.md#stdlib-preread`). Only the test hooks ask: `FLINT_PREREAD=0`,
-/// which reads the library from text to measure what the forms save, and the
-/// EDN spec `FLINT_SPEC_OUT` and `FLINT_CHECK_SPLIT` compare against.
-fn stdlib_text(path: &str, root: usize) -> Result<String> {
-    // Relative to the CURRENT DIRECTORY, not `env!("CARGO_MANIFEST_DIR")`. The
-    // old version resolved against where this binary was BUILT -- a compile-time
-    // `&'static str` literal that `--remap-path-prefix` cannot touch (that
-    // rewrites `file!()`/debuginfo locations, not `env!()` expansions), so it
-    // baked the builder's checkout path into every release of this binary
-    // (DECISIONS.md#reproducible-build-paths). Every caller of the env vars
-    // below (`test/cli.clj`, `bin/conform-hosts`) already runs
-    // `./target/release/flint` from the repo root, which is also where `lib/`
-    // actually is for THIS checkout -- the thing this dev-only hook is
-    // supposed to measure -- so CWD is the more correct answer, not just the
-    // reproducible one.
-    let dir = STDLIB_ROOTS[root].0;
-    let p = Path::new(dir).join(path);
-    fs::read_to_string(&p).map_err(|e| anyhow::anyhow!(
-        "this binary carries the standard library READ, not as text; reading it as text \
-         (FLINT_PREREAD=0, FLINT_SPEC_OUT, FLINT_CHECK_SPLIT) needs the source tree it was \
-         built from, and {dir}/{path} is not there: {e}"))
+impl Body {
+    /// The body as EDN, for the spec rendered as TEXT (`FLINT_SPEC_OUT`,
+    /// `FLINT_CHECK_SPLIT`): the bytes as base64 under `:preread`, which an
+    /// EDN spec has no other way to carry.
+    fn edn(&self) -> String {
+        match self {
+            Body::Forms(b, d) => format!("{{:preread {} :dialect :{d}}}", edn_string(&base64(b))),
+            Body::Read(b, d) => format!("{{:preread {} :dialect :{d}}}", edn_string(&base64(b))),
+            Body::Unreadable(m, l, c) => {
+                format!("{{:read-error {{:message {} :line {l} :column {c}}}}}", edn_string(m))
+            }
+        }
+    }
 }
 
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
@@ -682,26 +684,20 @@ fn build_spec_impl(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     // it does not compile (`DECISIONS.md#flint-ception`). Default is ON, so a build
     // that says nothing about features keeps it.
     let nested = features.map_or(true, |f| f.iter().any(|x| x == ":flint/nested"));
-    // THE STANDARD LIBRARY AS FORMS, one read for every feature set
-    // (`DECISIONS.md#stdlib-preread`). As text only for the test hooks:
-    // `FLINT_PREREAD=0` is how the saving is measured and a suspected
-    // pre-read defect ruled in or out, and the EDN spec has nowhere to put
-    // bytes.
-    let as_text = !split || std::env::var("FLINT_PREREAD").is_ok_and(|v| v == "0");
     // THE FILES AND WORKSPACES, built once (`spec_inputs`) and rendered below
-    // -- the EDN text here, a namespace at a time in `resolve::Answers`.
-    // Read by the host only on the split path: the EDN spec has nowhere to put
-    // bytes, which is the same reason the standard library goes as text there.
+    // -- the EDN text here, a namespace at a time in `resolve::Answers`. READ,
+    // on both paths: the compiler reads no text
+    // (`DECISIONS.md#one-reader-and-no-other`), so the EDN spec carries each
+    // file's bytes as base64 (`Body::edn`).
     let rf = read_features(features, strip_checks);
-    let inputs = spec_inputs(srcs, pods, nested, as_text, if split { Some(&rf) } else { None })?;
+    let inputs = spec_inputs(srcs, pods, nested, Some(&rf))?;
     let files = inputs.files;
     let mut out = String::from("{:files {");
     if !split {
         for (k, v) in &files {
-            let Body::Text(v) = v else { unreachable!("an EDN spec is built from text") };
             out.push_str(&edn_string(k));
             out.push(' ');
-            out.push_str(&edn_string(v));
+            out.push_str(&v.edn());
             out.push(' ');
         }
     }
@@ -1374,7 +1370,10 @@ pub(crate) fn run_source_qs(srcs: &[PathBuf], entry: &str, args: &[String], caps
                                    &pod_vars, strip_checks, None)?;
         let mut d = load_compiler()?;
         let d0 = d.steps();
-        let r0 = d.run(&["project", &full]);
+        // The EDN spec READ by the host like any other (`compile_split` reads
+        // its spec argument), with no encoded bodies beside it: every body is
+        // inside, as base64 (`Body::edn`).
+        let r0 = compile_split(&mut d, &["project", &full], &SplitFiles { bodies: BTreeMap::new() });
         eprintln!("CHECK-SPLIT identical={} split-steps={} edn-steps={}", r.out == r0.out,
                   c.steps() - s0, d.steps() - d0);
     }
@@ -2009,7 +2008,7 @@ struct Args {
     // implies"; `Some(false)` means off whatever it implies.
     checks: Option<bool>,
     // `:features [flint flint/check]` -- the reader's feature set, said rather
-    // than defaulted. `None` means `flint.compiler.reader/default-features`.
+    // than defaulted. `None` means `flint.compiler.forms/default-features`.
     //
     // It also decides whether `flint.ception` is NAMEABLE: `:flint/nested` is in
     // the default set, and a build compiled without it cannot `:require` the

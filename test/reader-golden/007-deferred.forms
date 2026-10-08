@@ -1,0 +1,209 @@
+FLF1zstdcore/flint/port.fln Ports: an endpoint you send to and receive from.
+
+  A port is the unit of impurity. flint is a pure logic executor; a port is how
+  a host *lends* it a capability, and how two green threads talk. Either end may
+  be inside the runtime or held by the host.
+
+      (let [[a b] (channel)]        ; a coupled pair
+        (send a :hello)
+        (receive b))                ; => :hello
+
+      (with-open [r (open "clock")]
+        (send r :now)
+        (receive r))
+
+  ## What may cross
+
+  **Data, and capabilities.** A function is refused *by name* at the send,
+  because a closure's meaning is its environment and an environment does not
+  travel.
+
+  A **bridge may be sent through a bridge**, and that is how a capability is
+  delegated: its id is the host's own and means the same thing on the far side,
+  so the receiver ends up holding *the same port*. `host-abi` called the absence of
+  this the right default and `structured-ports` reversed it.
+
+  A **channel end may not** cross a bridge. Both its ends live in this heap and
+  the host has never been told it exists, so its id would name one of our
+  objects from outside ‚Äî a refusal with a reason, not a silent promotion.
+
+  Transfer is **by value**. Inside one runtime the value is passed by reference
+  as an optimisation, and that is sound *precisely because flint values are
+  immutable* ‚Äî there is no way for the sender to observe a later change, because
+  there are no later changes. A mutable-object language could not take this
+  shortcut.
+
+  ## Back-pressure
+
+  Every port has a bounded buffer, and a send to a full one parks the sending
+  thread until there is room ‚Äî the same parking mechanism as `open`, not a
+  second one. A channel is bounded in **messages**; a host port is bounded in
+  **bytes**, because the point of back-pressure is to bound memory and one 4 MB
+  message is not one message's worth of it.
+
+  ## Lifetime: close is the good path, collection is the net
+
+  `with-open` closes on the way out, including on a throw, and it is the shape
+  to reach for. If a script simply drops its last reference to a port, the
+  collector finds it unreachable and the runtime closes it on the script's
+  behalf ‚Äî but that is a *safety net*: it is deterministic, and it is not
+  prompt, and a host holding a socket open until then is a real cost.
+
+  ## What a bridge carries
+
+  **Values, not bytes.** A bridge encodes on the way out and decodes on the way
+  in, and the runtime is what does it ‚Äî there is no codec to choose, to attach,
+  or to get wrong, and `send` takes the same value a channel would take.
+
+  That is a safety rule, not a convenience (`DECISIONS.md#structured-ports`). The wire
+  format writes an opaque value's host id inline, and bytes are integers a guest
+  can write; a codec running in here would therefore be an integer-to-capability
+  conversion, and an opaque value's whole meaning is that no such conversion
+  exists. Keeping the encoder on the runtime's side of the line is what makes
+  `(send p {:cap c})` safe to allow at all.
+
+  There used to be a `:codec` option taking `:encode`/`:decode` functions. It is
+  gone, and so is the raw byte mode it sat on: a port that carried strings the
+  program had already serialised was the same hole seen from the other side.âA coupled pair `[a b]`: what goes into one comes out of the other, both ways.
+  `cap` is the buffer size in messages (default 16); `label` is for diagnostics
+  and shows up in a deadlock report.
+
+  Both ends are in this heap, so a message is a pointer move: nothing is
+  encoded, nothing is copied, and an identity crossing one still means what it
+  meant. This is the port that costs nothing.§Ask the host for a port called `name`, forwarding `opts` to it verbatim.
+
+  **A request, not a construction** (`DECISIONS.md#ports-are-the-hosts`). The sandbox cannot
+  make a bridge; it asks on the system port it was given at construction, and
+  the host answers with a handle on a port the host already owns ‚Äî or refuses,
+  which is a normal outcome and arrives as a catchable `SecurityException`. A
+  sandbox given no system port cannot ask at all, and is told so.
+
+  **The runtime takes no view of what `opts` contains.** It crosses as data, and
+  anything in it that is an opaque value (`DECISIONS.md#opaque-values`) crosses carrying
+  the host id it was ISSUED with. So a host that lent a capability recognises
+  its own and nothing else, and one that requires none simply ignores what it
+  was sent.
+
+      (p/open "fs")                   ; ask, present nothing
+      (p/open "fs" {:capability c})   ; present what you hold…True when this port crosses a heap ‚Äî the host owns the other end, messages
+  are encoded, and only what means something on the far side may cross.
+
+  False for a channel, whose ends are both in here.èWhat this end is doing:
+
+  | | |
+  |---|---|
+  | `:pending` | an `open` the host has not answered |
+  | `:open` | both ends live |
+  | `:half-closed` | the peer closed cleanly; drain what is buffered, then end of stream |
+  | `:closed` | this end is closed |
+  | `:orphaned` | the peer went away *without* closing; receiving errors |
+  | `:refused` | the host would not lend this capability |
+
+  A channel is only finished when **both** ends are, which is why half-closed is
+  a state you can see rather than a race you cannot.ˆCan nothing new ever arrive here? True once this end is closed, the peer has
+  closed (`:half-closed` ‚Äî anything already buffered is still readable), or the
+  peer is gone.
+
+  Asking is always available; waiting to be told is not always enough.'The number the host knows this port by.ú	Does anything in `v` need CHANGING before it goes on the wire?
+
+  The question is whether what a node currently carries is what should cross --
+  NOT whether it has something to declare. Those differ in the case that
+  matters: a value carrying `{:a 1}` whose `WireMeta` answers nil needs its
+  metadata STRIPPED, and a predicate asking only `is there wire metadata`
+  answers no and leaves it on. The encoder emits whatever metadata it is handed,
+  so that is `{:a 1}` crossing a bridge for a program that never asked -- which
+  is exactly the default this feature promises not to break. Found by the gate,
+  after a first version that asked the wrong question.
+
+  Asked FIRST, so that the common answer -- nothing differs -- costs one pass
+  and changes nothing. That is not an optimisation, it is the other half of the
+  correctness rule: `for-the-wire` rebuilds, and rebuilding a value that did not
+  need it is not invisible. `(into {} ..)` gives back a map with the same
+  entries in a different ORDER, and a host test that had always seen
+  `{:a #{1 2}, :b [:x]}` started seeing `{:b [:x], :a #{1 2}}`. A value with
+  nothing to change crosses as the object it already was.˜`v` rebuilt with only the metadata that should cross.
+
+  One pass over the structure, asking `flint.protocols/-wire-meta` at each node
+  and keeping what it answers. The default answer is nil for every built-in
+  kind, so a program that has not opted in sends exactly what it sent before
+  this existed -- the same object, unrebuilt, with its metadata dropped at the
+  boundary as the encoder has always dropped it.
+
+  DONE HERE, IN FLINT, and not in the encoder. The encoder is runtime code; a
+  protocol is dispatched in the image. Reaching from one to the other would mean
+  the runtime calling guest code in the middle of a `send`, which is re-entrancy
+  into the interpreter at the worst possible moment -- a send can happen
+  anywhere, including inside a forced lazy seq. A pass up here is ordinary flint
+  calling ordinary flint, and what reaches the encoder is a plain value whose
+  metadata is already the answer.
+
+  ONLY ON A BRIDGE, because only a bridge encodes. A channel hands the object
+  over as it stands, so nothing is selected and nothing is lost.
+
+  It walks the whole structure, so a port nested inside a map is asked too.ïPut `v` into the other end. Parks if that end's buffer is full.
+
+  On a bridge the value is **encoded now**, by the runtime, not when the host
+  gets round to reading it: that is what makes draining cheap and the byte
+  budget mean something. A value the wire format cannot represent is an error
+  here, naming the value ‚Äî not a quiet coercion.
+
+  A function is refused **by name**, on any port: a closure's meaning is its
+  environment and an environment does not travel.
+
+  ## Metadata
+
+  On a bridge, what crosses is what `flint.protocols/WireMeta` selects, and the
+  default for every built-in kind is NONE. See `for-the-wire` below.
+
+  On a CHANNEL nothing is selected and nothing is dropped: the value moves by
+  pointer, so it arrives as the same object with the metadata it always had.
+  The two are not inconsistent -- a channel does not serialise, so there is no
+  question of what to write down.
+
+  ## Who writes the bytes
+
+  `flint.wire`, which is flint (`DECISIONS.md#the-codec-is-guest-code`). The
+  runtime still carries an encoder and `port-send` still accepts a value, but
+  nothing in the library reaches it any more: what goes to a bridge is a
+  writer, already finished, and the runtime's part is to check it is complete
+  and take its bytes.
+
+  The encoding is therefore GUEST WORK and billed as guest work. It is also
+  where a value the format cannot carry is refused -- by name, naming the kind,
+  before any of it reaches the port.
+
+  A WRITER PASSES STRAIGHT THROUGH. A guest that encoded for itself -- a
+  streaming encoder over a structure it never builds -- hands over the writer,
+  and encoding that again would ask the encoder to encode its own output.»Take the next message. Parks if there is none; returns `nil` once the port is
+  closed and drained.
+
+  On a bridge the bytes are decoded HERE, by `flint.wire` -- guest code reading
+  a guest encoding (`DECISIONS.md#the-codec-is-guest-code`). On a channel the
+  value is handed over as it stands. Either way this answers a value.Close a port ‚Äî any port, not only one you opened. Anybody parked on it wakes
+  and reads end-of-stream, and the host is told.öBind ports, run the body, and close them on the way out ‚Äî including when the
+  body throws. This is the good path: the collector will close a dropped port
+  eventually, but eventually is not promptly, and a host holding a resource open
+  until a collection happens is a real cost.optsfilefeaturesanytagsdialectflintcondsns
+flint.portrefer-clojureonlyrequireflint.core.implreferallflint.rtflint.protocolsasproto
+flint.wirewiredefnchannellabelifstring?capopennameencodeorport?xbridge?pport-bridge?state
+port-stateclosed?lets=closedhalf-closedorphanedrefused
+port-labelport-iddefn-wire-differs?vandsome?metanot=
+-wire-metacondvector?booleansomeset?map?fnekeyvallist?elsefor-the-wireif-notmwalkedmapvintomapapplylist	with-metasend	port-sendnotwire-writer?receiverport-receive-readerwhen	read-fromport-receiveclose
+port-closedefmacro	with-openbindings&bodyempty?consquotedoclojure.corefirstsecondtrylist*vecdropfinallys       ! " # $ %% & ' ( ) * + *#, - . /. 0 12 34 5 6 7 89:;<= >> ? @ A B C D E!F G H I J K L M N O P QR S T U V W X Y Z [ \ ]^ _` a bc d#ef gh i j k l m n o p qr6 s t u vj w x yg
+ 
+  	    	é
+  	    	   % +	 , 6	 7 K G R	 S b ^     	       	         ! 5 2 < = N  T 	  	   " &  " 	       	  
+     ! %	 & + ," / 4 
+   # 	 $  % !$  &
+	 ' ( '  )	 ' * '  +	 ' , 	 	-  ) ' " 	 
+. -/   . -0  * +. --1 / : ;. =-2 ?   	 '  3 &'  4	 ' 5 ' 6 7&	 8 " 9 
+ :  ; 8  < ! "= 38 6 7; <8 > ? 8  @  A "7 08 B 8  @  A 7 -8 C 8  @  A   D #	 $E ' (" + ,7 : ;F ?E+ ,7 : ;G ?E E8
+ H 8  @  A  7 .8I  J	*	 8 K  7 88 , 
+	 L  = 8M  > ? 8   !N &J 38 B 8  O #   ' (P ,J 98 C 8  O # 
+  & 'P + ,D /	 0E 3	 4 5J B CF GE4 5J B CG GE M8 H 8  Q %R * +P /J <8I8 >	 
+: L  S M %L	 
+:  ; M   S *M  1IM	  T
+H	 ' 8 U '    9 " #( 9'" #V ' (W >8 ! ( )J 688  X	 '   ( ' , 
+	 Y  Z +' [  : Y  \ 'Y ] '  ^	 ' _ ' ` a
+	 b c d
+   e b f g h d R g i 	  j %b / 0k 7b R g l/ m g n/ . /o 3 4p ;b 9 Fd R g q.F   !R &g 'r.F 8 9j ?b

@@ -1,0 +1,1 @@
+read error: an ns form inside a reader conditional cannot be read before its features are known (DECISIONS.md#stdlib-preread) (test/reader/err-cond-ns.cljc:1:18)

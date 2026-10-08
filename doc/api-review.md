@@ -577,7 +577,7 @@ namespace.
 
 322 public vars. flint's clojure.core. Written in cljc on top of the Rust primitives, for the reason in DECISIONS.md#modularity: a cljc function tree-shakes per var, so a program that never calls `partition-by`...
 
-**CHANGED 2026-10-08 (`DECISIONS.md#four-units`, `DECISIONS.md#defalias`): a stdextra library, not stdcore, and 102 of its public vars are ALIASES.** `lib/stdextra/clojure/core.fln`; the vars stdcore needs live in `flint.core.impl` and are published here by `defalias`, so the public surface is unchanged -- same names, same arities, same macro-ness (`doc/manifest.edn` regenerated: only `:file` moved). What changed for an embedder: a host that omits `stdextra()` now gets no `clojure.core`, and a program referring it reports it `:missing` at the referring namespace; and a host resolver that answers `clojure.core` ahead of `stdextra()` now REPLACES it, exactly as it may replace any other stdextra name -- it used to be answered before any resolver ran. A reviewer should decide whether that second consequence is wanted.
+**CHANGED 2026-10-08 (`DECISIONS.md#four-units`, `DECISIONS.md#defalias`): a stdextra library, not stdcore, and 102 of its public vars are ALIASES.** `lib/stdextra/clojure/core.fln`; the vars stdcore needs live in `flint.core.impl` and are published here by `defalias`, so the public surface is unchanged -- same names, same arities, same macro-ness (`doc/manifest.edn` regenerated: only `:file` moved). What changed for an embedder: a host that omits `stdextra()` now gets no `clojure.core`, and a program referring it reports it `:missing` at the referring namespace; and a host resolver that answers `clojure.core` ahead of `stdextra()` now REPLACES it, exactly as it may replace any other stdextra name -- it used to be answered before any resolver ran. *Answered by the maintainer 2026-10-08: wanted -- the resolver decides; only stdcore, with `flint.check`'s two variants, is never asked of a host.*
 
 **Change requests:** _none recorded_
 
@@ -679,44 +679,29 @@ encoded rather than as EDN text (the native CLI's `compile_split`); either way
 `llvm` `clr` `jvm`) and are reached by a user through the `cli:compile` sections
 above.
 
-**The sixth, `preread`, is new** (`1c9bff0b`, `DECISIONS.md#stdlib-preread`;
-its answer changed on branch `read-forms`): `["preread" spec-edn]`, answering
-`{path bytes}` -- every file named in the spec's `:files`, read once by
-`flint.compiler.reader/read-deferred` (reader conditionals kept as data, so the spec's
-`:features` no longer matter and are ignored) and encoded by
-`flint.compiler.forms/encode`, which records the read options a compile checks before
-it uses the forms (`:file` `:tags` `:dialect`, and `:features :any`). It
-produces no artifact; it is the standard library READ, ahead of any feature
-set. It answered `{path {:opts .. :forms ..}}` through the host codec before,
-and was called once per feature set.
+**CHANGED 2026-10-08, not reviewed** (`DECISIONS.md#one-reader-and-no-other`):
+**the spec goes READ, and `preread` is gone.** The compiler reads no text, so
+the spec argument is the `flint.forms` bytes of the spec's EDN, read by the
+caller with the kin reader (`flint_rt::hostread`, `host/spec.mjs`,
+`Formsenc.readForms` in `com.flint.Compiler`/`Flint.Rt.Compiler`) -- or a map,
+from a caller that can build one. A spec handed over as a STRING is refused by
+name. Every file body is READ too: `{:preread bytes :dialect d}` in a `split`
+map, or `{:preread "<base64>" :dialect d}` inside an EDN spec (what
+`bin/flint --emit-spec` writes, for `:sources`, and the native CLI's
+`FLINT_SPEC_OUT`, for `:files`); a body that did not read goes as
+`{:read-error {:message :line :column}}`, reported only if the compile
+reaches it. `:src` text is refused. The sixth mode, `preread` -- the
+compiler reading the standard library for `cli/build.rs` -- is deleted with
+the reader it ran: `cli/build.rs` reads with the kin reader itself.
 
-**Its only caller is `cli/build.rs`** (`fn preread`), which runs it once
-against `dist/flintc.bytecode` at cargo-build time over every `lib/` file and
-bakes the bytes into the binary with `include_bytes!` -- without the text,
-which the binary no longer carries. Nothing calls it through `flintc.wasm` at
-run time: it is "reachable through `flintc.wasm` by any host" only in the
-sense that it is a mode of the same `main` the wasm build exposes, not because
-any host exercises that path today.
-
-**What a caller may HAND BACK changed with it.** A `split` file body may now be
-`{:preread bytes}` -- those bytes, and no `:src` -- and `flint.compiler.resolve/read-entry`
-decodes them only if the compile reaches that namespace, refusing them with a
-sentence when their options are not the compile's. The first version took
-`{:src text :preread {:opts .. :forms ..}}`, which no longer decodes.
+The change request below was about `preread`, and is moot unless the
+reviewer wants the question kept for the next build-time-only mode.
 
 **Change requests:**
 
-1. **Whether a build-time-only mode counts as a published surface at all is
+1. *(Moot since 2026-10-08: `preread` is deleted.)* **Whether a build-time-only mode counts as a published surface at all is
    the question `DECISIONS.md#stdlib-preread` leaves open, and this section
-   does not resolve it.** `preread` fits none of AGENTS.md §9's three kinds
-   cleanly -- not a guest namespace, not quite an SDK method since no SDK
-   calls it, not a CLI command -- but it is reachable the same way the real
-   SDK calls are, through the same `main`, so it is recorded here rather than
-   left undocumented. It also answers a map of encoded forms rather than an artifact
-   or a string, unlike every other mode `main` has. The reviewer's call is
-   whether that makes it this surface's business, a CLI-only concern, or its
-   own thing, and whether `bin/check-api-review` should grow a fourth kind to
-   gate it.
+   does not resolve it.**
 
 ## sdks/c
 
@@ -726,6 +711,15 @@ The C embedding API: `include/flint.h`, and `selftest.c` / `selftest.cpp`, which
 pin it from both languages. What a C or C++ host sees. All three files confirmed
 present 2026-09-26; the header's path is `sdks/c/include/flint.h` rather than the
 package root, which is what a consumer's `-I` has to name.
+
+**BROKEN ON PURPOSE 2026-10-08, not reviewed** (`DECISIONS.md#one-reader-and-no-other`,
+pre-release): `FlintResolver` gains a fourth parameter, `FlintDialect *dialect`, and
+`flint.h` a `FlintDialect` enum (`FLINT_DIALECT_PORTABLE`, `FLINT_DIALECT_FLINT`).
+A resolver sets it to say its source is `.fln`; left alone, it is portable. Before,
+the hook could not say, and every embedder's namespace was compiled as `.cljc`
+whatever it was -- so a `.fln` could not use a workspace prelude, a flint-only
+tag or `defalias`. `flint.hpp`'s `Resolver` gains a `FlintDialect &` argument
+the same way. Both selftests updated.
 
 **Change requests:** _none recorded_
 
@@ -749,6 +743,17 @@ call's reply DOES still cross with metadata**: that was briefly otherwise, the
 same day, while the call loop re-implemented the wire codec in builtins
 instead of calling `flint.port/send`/`flint.wire/read-from` -- corrected before
 this review, so there is nothing left for the reviewer to weigh here.
+
+**BROKEN ON PURPOSE 2026-10-08, not reviewed** (`DECISIONS.md#one-reader-and-no-other`,
+pre-release): `Compile::resolve` is `&dyn Fn(&str) -> Option<Source>`, not
+`Option<String>`. Two new public items, `Source { text, dialect }` (with
+`Source::portable`/`Source::flint`) and `Dialect { Portable, Flint }`, so a
+resolver says what dialect its source is in; `dir_resolver` answers by the
+extension it found. The SDK READS each source itself, with the kin reader, and
+hands the compiler bytes -- the compiler reads no text -- and its embedded
+standard library is embedded already read. `tests/sdk.rs`'s
+`the_resolver_says_the_dialect` holds it: the same library is compiled with
+`defalias` as `.fln` and refused as portable.
 
 **Change requests:** _none recorded_
 

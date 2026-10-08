@@ -9,7 +9,7 @@
 ;; The failure this file exists to catch is the dangerous one: a shake that
 ;; removes something reachable produces a module that is SMALLER and traps at
 ;; run time, and only running it says so.
-(require '[babashka.classpath :as cp]) (cp/add-classpath "src")
+(require '[babashka.classpath :as cp]) (cp/add-classpath "src") (load-file "test/hostread.clj")
 (require '[flint.compiler.bundle :as bundle] '[flint.compiler.image :as img]
          '[flint.compiler.core :as compiler] '[flint.compiler.resolve :as project]
          '[flint.compiler.wasm :as w] '[flint.compiler.wasmshake :as ws] '[flint.compiler.shake :as shake]
@@ -99,11 +99,16 @@
         find-src (fn [n] (let [b (project/ns->path n)]
                            (some (fn [ext]
                                    (when-let [s (get all (str b ext))]
-                                     {:src s :file (str b ext)}))
+                                     ;; READ by the kin reader, as every door
+                                     ;; reads (`DECISIONS.md#one-reader-and-no-other`).
+                                     (merge {:file (str b ext)}
+                                            (first (hostread/read-texts
+                                                    [{:file (str b ext) :text s
+                                                      :dialect (hostread/dialect-of (str b ext))}])))))
                                  [".fln" ".cljc" ".clj"])))
         {:keys [sources order]} (project/resolve-project find-src (symbol (namespace entry)) #{:flint})
         r (compiler/compile-image
-           {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e)) :file (:file (val e))
+           {:sources (into {} (map (fn [e] [(key e) {:forms (:forms (val e)) :file (:file (val e))
                                                        ;; `defalias` needs the answer's dialect
                                                        ;; (`DECISIONS.md#defalias`).
                                                        :dialect (:dialect (val e))}]) sources))

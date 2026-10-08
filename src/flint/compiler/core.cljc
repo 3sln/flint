@@ -12,14 +12,15 @@
      that reference graph, and emit only those. Tree shaking is per VAR, not per
      namespace, which is what makes `clojure.core` affordable to ship."
   (:require [clojure.string :as str]
-            [flint.compiler.reader :as reader]
+            [flint.compiler.forms :as reader]
             [flint.compiler.analyzer :as ana]
             [flint.compiler.emitter :as emit]
             [flint.compiler.eval :as ev]
             [flint.compiler.types :as ty]
             [flint.compiler.image :as img]
             [flint.compiler.macros :as macros]
-            [flint.compiler.callentry :as callentry]))
+            [flint.compiler.callentry :as callentry]
+            [flint.rt]))
 
 (defn- err [msg data] (throw (ex-info msg (assoc data :type :compile))))
 
@@ -438,38 +439,6 @@
     (sequential? node) (mapcat ast-defs node)
     :else nil))
 
-(defn read-source
-  "Every form in one namespace's source. A function of the TEXT and how to read
-  it -- features, tags, dialect -- and of nothing the compiler has learned, so
-  `flint.compiler.resolve/collect-waves`'s read, which finds the requires, is this read, and
-  `compile-image` takes those forms rather than reading the file again
-  (`flint.reader/syntax-quoted` says why it used to have to)."
-  [cc nsname src file tags]
-  ;; Not #{:clj}: flint is not the JVM, and a :clj branch here would be
-  ;; host interop we cannot compile. Ported code needs a :flint or
-  ;; :default branch -- said plainly in the README.
-  ;;
-  ;; It is overridable because third-party `.cljc` written before flint
-  ;; existed offers neither. Such a library's `#?(:clj .. :cljs ..)`
-  ;; selects NOTHING here, and inside a map literal that leaves an odd
-  ;; number of forms -- so the file does not even READ. Which set actually
-  ;; helps is a measurement, not a preference; see `flint build :features`.
-  ;; `:tags` travels with the source, per SOURCE ROOT. It cannot be
-  ;; defaulted here for the same reason `:features` cannot -- and for the
-  ;; reason `default-features` records: a file read in more than one place
-  ;; must be read the same way in each, and a value only one of them knows
-  ;; about is a value the others get wrong (`DECISIONS.md#reader-tags`).
-  ;; THE DIALECT is read off the context rather than passed in, because
-  ;; `compile-image` already lifted it there from the sources and a
-  ;; second channel for one fact is a second thing to get out of step.
-  ;; A synthetic namespace -- the check registry, the entry shim -- has
-  ;; no entry there and so reads as `:flint`, which is what it is: the
-  ;; compiler wrote it and no other platform will ever read it.
-  (reader/read-all src {:file file
-                        :features (or (:features @cc) reader/default-features)
-                        :tags tags
-                        :dialect (get-in @cc [:workspaces nsname :dialect])}))
-
 (defn- ns-mark
   "Which mark, if any, this namespace's `ns` form carries on its own NAME --
   `(ns ^:internal x ..)` or `(ns ^:private x ..)`. The reader attaches
@@ -579,11 +548,6 @@
         (when (:dynamic vis)
           (vswap! cc assoc-in [:dynamic q] true))))
     forms))
-
-(defn read-namespace!
-  "Read one namespace and declare what it defines (`declare-namespace!`)."
-  [cc nsname src file tags]
-  (declare-namespace! cc nsname (read-source cc nsname src file tags)))
 
 (defn analyze-namespace!
   "Analyze one namespace's already-read forms, appending to `:items` in order."
@@ -889,16 +853,22 @@
                            :checked? (boolean (seq (:vars info)))}])))
     (let [read-forms (into {} (for [nsname order
                                     :when (not (:virtual (get sources nsname)))]
-                                (let [{:keys [src file tags forms]} (get sources nsname)]
-                                  (when-not (or forms src)
-                                    (err (str "no source for namespace " nsname) {:ns nsname}))
+                                (let [{:keys [forms]} (get sources nsname)]
+                                  ;; FORMS ONLY. The compiler reads no text
+                                  ;; (`DECISIONS.md#one-reader-and-no-other`):
+                                  ;; whoever resolved the namespace read it.
+                                  (when-not forms
+                                    (err (str "no forms for namespace " nsname
+                                              " -- the compiler reads no source text; the host"
+                                              " reads it (DECISIONS.md#one-reader-and-no-other)")
+                                         {:ns nsname}))
                                   ;; THE RESOLVER'S FORMS when it kept them, which
                                   ;; every front door's does: the reader is
                                   ;; context-free, so a second read would produce
                                   ;; the same forms at the cost of the read.
                                   [nsname (declare-namespace!
                                            cc nsname
-                                           (or forms (read-source cc nsname src file tags)))])))]
+                                           forms)])))]
       (doseq [nsname order
               :when (not (:virtual (get sources nsname)))]
         (analyze-namespace! cc nsname (get read-forms nsname))))
@@ -910,10 +880,11 @@
     ;; checks on load and so a host can enumerate them from a shipped artifact
     ;; without having a compiler at all.
     ;;
-    ;; Generated as source and analysed like any other namespace, which is the
+    ;; Generated as FORMS and analysed like any other namespace, which is the
     ;; same trick the entry shim uses one form down -- a synthetic namespace is
     ;; cheaper than a second path through the emitter, and it is ordinary flint
-    ;; that a person can read in `--explain`.
+    ;; that a person can read in `--explain`. Forms and not source text: the
+    ;; compiler reads no text (`DECISIONS.md#one-reader-and-no-other`).
     ;;
     ;; It exists only in a build with `:flint/check`, so it costs a release
     ;; build nothing. It does make every test var REACHABLE, which is what
@@ -927,20 +898,16 @@
                        sort
                        vec)
             reg-ns 'flint.check.registry
-            src (str "(ns flint.check.registry)\n"
-                     "(def tests\n"
-                     "  [" (apply str
-                                  (map (fn [q]
-                                         (str "{:var '" q " :fn " q "}\n   "))
-                                       tests))
-                     "])\n"
-                     ;; The entry `flint test` points at. It lives here rather
-                     ;; than in `flint.check` because `flint.check` is analysed
-                     ;; FIRST and cannot name a registry that does not exist
-                     ;; yet -- so the data is passed to it instead.
-                     "(defn run [_] (flint.check/run-tests tests))\n")]
+            forms [(list 'ns reg-ns)
+                   (list 'def 'tests
+                         (mapv (fn [q] (flint.rt/array-map [:var (list 'quote q) :fn q])) tests))
+                   ;; The entry `flint test` points at. It lives here rather
+                   ;; than in `flint.check` because `flint.check` is analysed
+                   ;; FIRST and cannot name a registry that does not exist
+                   ;; yet -- so the data is passed to it instead.
+                   (list 'defn 'run ['_] (list 'flint.check/run-tests 'tests))]]
         (when (seq tests)
-          (analyze-namespace! cc reg-ns (read-namespace! cc reg-ns src "<check-registry>" {})))))
+          (analyze-namespace! cc reg-ns (declare-namespace! cc reg-ns forms)))))
 
     ;; The entry shim: convert the result to text here, in cljc, so the printer
     ;; is reachable only because this shim uses it -- not because the runtime
@@ -967,8 +934,8 @@
           ;; kept, which made the runtime the arbiter of a concept that belongs
           ;; to the host.
           call (if takes-caps?
-                 (str "(" entry " args caps)")
-                 (str "(" entry " args)"))
+                 (list entry 'args 'caps)
+                 (list entry 'args))
           ;; A PROGRAM WITHOUT `clojure.core` still gets a shim
           ;; (`DECISIONS.md#four-units`): `clojure.core` is reached only by the
           ;; namespaces that refer it, so a program whose namespaces all say
@@ -981,23 +948,22 @@
           ;; every program (stdcore requires it). With `clojure.core` present
           ;; the shim is the one it always was.
           core? (contains? (:namespaces @cc) 'clojure.core)
-          shim-src (if core?
-                     (str "(ns flint.main (:require [" (namespace entry) "]))\n"
-                          "(defn -main [in]\n"
-                          "  (let [args (nth in 0 nil)\n"
-                          "        caps (nth in 1 nil)\n"
-                          "        r " call "]\n"
-                          "    (if (string? r) r (pr-str r))))\n")
-                     (str "(ns flint.main (:refer-clojure :only []) (:require [" (namespace entry) "]))\n"
-                          "(defn -main [in]\n"
-                          "  (let [args (flint.rt/nth in 0 nil)\n"
-                          "        caps (flint.rt/nth in 1 nil)\n"
-                          "        r " call "]\n"
-                          "    (if (flint.rt/string? r) r (flint.core.impl/pr-str r))))\n"))]
+          req (list :require [(symbol (namespace entry))])
+          [nth* string?* pr-str*] (if core?
+                                    '[nth string? pr-str]
+                                    '[flint.rt/nth flint.rt/string? flint.core.impl/pr-str])
+          shim-forms [(if core?
+                        (list 'ns 'flint.main req)
+                        (list 'ns 'flint.main (list :refer-clojure :only []) req))
+                      (list 'defn '-main ['in]
+                            (list 'let ['args (list nth* 'in 0 nil)
+                                        'caps (list nth* 'in 1 nil)
+                                        'r call]
+                                  (list 'if (list string?* 'r) 'r (list pr-str* 'r))))]]
       (when-not core?
         (vswap! cc assoc-in [:workspaces shim-ns]
                 {:workspace (get-in @cc [:workspaces 'flint.core.impl :workspace])}))
-      (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>" {})))
+      (analyze-namespace! cc shim-ns (declare-namespace! cc shim-ns shim-forms)))
 
     (let [entry-var 'flint.main/-main
           ;; Everything that must stay CALLABLE, not just the default entry.

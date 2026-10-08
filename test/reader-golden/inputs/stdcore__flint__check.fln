@@ -1,0 +1,340 @@
+(ns flint.check
+  "Checks that cost nothing in a release build.
+
+  Two things at once, and they are the same thing seen from two sides:
+
+  * **Inline checks** against bad usage, so a library says what went wrong
+    where it went wrong rather than failing three frames later with a message
+    about a type nobody passed.
+  * **Unit checks**, collected by `flint test`, written in the namespace they
+    are about rather than in a parallel tree.
+
+  ## Always resolvable, two variants
+
+  This namespace ALWAYS EXISTS (`DECISIONS.md#checks`): it is a compiler root
+  like `flint.port`/`flint.wire`, answered by the front door from its own
+  built-in copy before any host resolver is ever asked, whatever `features`
+  a compile runs with. What changes between builds is not whether
+  `flint.check` is present, but which of two variants each of its public
+  names resolves to, chosen by the single `#?(:flint/check A :default B)` on
+  each one below -- the same deferred-`#?` mechanism every other stdlib file
+  already uses to serve one pre-read copy to every feature set:
+
+  * **the ON variant** (`:flint/check` in `features`, the default): the real
+    implementation described below.
+  * **the OFF variant** (`:optimize [perf]`, or `:checks false`): every
+    public name still exists, with the SAME arity, so code that mentions
+    `flint.check/expect` or `flint.check/run-tests` with no
+    `#?(:flint/check ...)` wrapper and no `:require` compiles in both
+    builds. Each one is either a MACRO that expands to `nil` (for a
+    syntactic, assertion-shaped form -- there is nothing left to check, so
+    there is nothing left to compile: the argument forms are discarded by
+    the macro, never analysed, and cost nothing) or an ordinary function
+    that throws \"checks are not enabled in this build\" (for anything that
+    only makes sense while actually checking something, such as running a
+    test suite). A name's KIND (macro or function) is the same in both
+    variants; only the body differs.
+
+  Existing `#?(:flint/check ...)` conditionals elsewhere in `lib/` and in
+  user code keep working exactly as before -- they still select check-only
+  code at those call sites -- this change only means a reference to
+  `flint.check` itself no longer NEEDS one.
+
+  ## The predicate
+
+  `expect` takes a predicate and the value to test. A predicate is either an
+  ordinary function -- `string?`, `pos?`, anything -- or a value implementing
+  `Predicate`, which is what lets a predicate be COMPUTED:
+
+      (expect (http-status 200) response)
+      (expect (min-length 3) name)
+
+  Those return values that know both how to test and how to explain
+  themselves. An ordinary function cannot: flint drops metadata on a closure,
+  so a function has nowhere to carry an implementation. That constraint is the
+  reason the protocol is a protocol over VALUES rather than a registry keyed on
+  functions.
+
+  ## Why two hooks
+
+  `check` answers, `explain` describes -- and `explain` runs ONLY when `check`
+  said no. The happy path allocates nothing, which is what makes it reasonable
+  to put these inside the standard library's hot paths. The cost is that a
+  failing predicate is evaluated twice; every flint value is immutable, so the
+  second look sees exactly what the first did.
+
+  ## No requires
+
+  Deliberately. This namespace is compiled into every build (checks on or
+  off), and it is ordered before everything but `clojure.core` -- so anything
+  it required would have to be ordered before it too, and the pin that puts
+  it early would put it ahead of its own dependency. It joins strings with
+  `flint.rt/str-join` rather than `clojure.string` for that reason and no
+  other."
+  ;; stdcore REFERS NOTHING OF `clojure.core` (`DECISIONS.md#four-units`): it is
+  ;; in every image, `clojure.core` is a library only the namespaces referring it
+  ;; reach, and what this needs of it lives in `flint.core.impl`.
+  (:refer-clojure :only [])
+  (:require [flint.core.impl :refer :all]))
+
+;; --------------------------------------------------------------- protocol
+
+;; `check`/`explain` are ordinary FUNCTIONS in both variants (protocol
+;; methods dispatch exactly like a function from a caller's point of view --
+;; `(check p args)` is one call, inlined to nothing special), so the OFF
+;; variant mirrors that kind rather than becoming a macro. They THROW rather
+;; than no-op: there is no sensible stand-in answer for "does this predicate
+;; pass" when the checking facility itself is the thing switched off, unlike
+;; `expect` below, which has an obvious vanish.
+#?(:flint/check
+   ;; LONGHAND, the way `flint.protocols` writes its own: `defprotocol` and
+   ;; `extend-protocol` are `clojure.core`'s, and this namespace refers nothing
+   ;; of `clojure.core` (`DECISIONS.md#four-units`) -- it is stdcore, present in
+   ;; every image whether or not `clojure.core` is. This is exactly what
+   ;; `(defprotocol Predicate (check [p args]) (explain [p args]))` and
+   ;; `(extend-protocol Predicate :fn (check [f args] (apply f args)))` expand
+   ;; to, written out.
+   (do
+     (def Predicate__impls (flint.rt/atom {}))
+     (def Predicate
+       "How a value tests and describes itself.
+
+  `check` must be cheap and allocation-free on success -- it is called on every
+  checked call. `explain` is called only after `check` has already said no, so
+  it may do as much work as a good message needs.
+
+  Both take the arguments as a VECTOR, because `expect` is variadic: `(expect =
+  a b)` and `(expect between? x lo hi)` are ordinary uses, and a protocol whose
+  hooks took a single value could not express them."
+       (hash-map :flint/protocol 'flint.check/Predicate
+                 :impls Predicate__impls
+                 :method-keys '[flint.check/check flint.check/explain]))
+     (defn check
+       "Truthy if `args` pass."
+       [p args]
+       (let [f (find-protocol-method Predicate__impls 'flint.check/check p)]
+         (if f (f p args) (flint.protocols/protocol-miss 'flint.check/Predicate 'flint.check/check p))))
+     (defn explain
+       "Why `args` failed, as data: `{:expected .. :actual .. :note ..}`. Any
+       key may be absent; `expect` renders what it is given."
+       [p args]
+       (let [f (find-protocol-method Predicate__impls 'flint.check/explain p)]
+         (if f (f p args) (flint.protocols/protocol-miss 'flint.check/Predicate 'flint.check/explain p)))))
+   :default
+   (do
+     (defn check
+       "Checks are not enabled in this build. Always throws; see `expect`,
+       which becomes a free no-op instead of calling this."
+       [p args]
+       (throw (ex-info "checks are not enabled in this build" {})))
+     (defn explain
+       "Checks are not enabled in this build. Always throws."
+       [p args]
+       (throw (ex-info "checks are not enabled in this build" {})))))
+
+#?(:flint/check
+   (flint.protocols/extend-method Predicate :fn "check" (fn [f args] (apply f args))))
+
+#?(:flint/check
+   (defn- join-lines [xs]
+     (flint.rt/str-join (vec (interpose "\n" xs)))))
+
+#?(:flint/check
+   (defn- render-value
+     "A value as it should appear in a failure. Long ones are cut: an error that
+  scrolls off the screen is an error nobody reads."
+     [v]
+     (let [s (pr-str v)]
+       (if (> (count s) 200) (str (subs s 0 200) " ...") s))))
+
+(defn describe
+  "The explanation for `p` failing on `args`, as a map.
+
+  A predicate that does not implement `explain` gets one built from what
+  `expect` saw in the SOURCE -- which is why the macro carries the predicate
+  expression through. `string?` cannot describe itself, but `(expect string? x)`
+  can still say `expected  string?`.
+
+  Only makes sense while checking; the OFF variant throws."
+  [p args src]
+  #?(:flint/check
+     (let [f (find-protocol-method (:impls Predicate) 'flint.check/explain p)]
+       (or (when f (f p args)) {:expected src}))
+     :default
+     (throw (ex-info "checks are not enabled in this build" {}))))
+
+#?(:flint/check
+   (defn- caret
+     "A pointer under the offending expression.
+
+  The source line is not embedded -- the FORM is, and it prints back. So this
+  renders what was written rather than quoting it verbatim: whitespace and
+  comments are gone, and the column is the one the reader recorded for the
+  sub-form, which is exact."
+     [col n]
+     (str (flint.rt/str-join (vec (repeat col " ")))
+          (flint.rt/str-join (vec (repeat (max n 1) "^"))))))
+
+(defn failure-message
+  "A check failure, rendered.
+
+  Everything here came from `&form` at macro-expansion: the file, the line, the
+  column of the PREDICATE and of the ARGUMENT separately, and both expressions
+  as source. No source text is embedded in the image and none is read back at
+  run time.
+
+  Only makes sense while checking; the OFF variant throws."
+  [site explanation args]
+  ;; NO DESTRUCTURING: it expands into `clojure.core/get`, and this namespace
+  ;; refers nothing of `clojure.core` (`DECISIONS.md#four-units`).
+  #?(:flint/check
+     (let [file (:file site) line (:line site) column (:column site) in (:in site)
+           pred-src (:pred-src site) arg-src (:arg-src site)
+           pred-col (:pred-col site) arg-col (:arg-col site)
+           expected (:expected explanation) note (:note explanation)
+           head (str "check failed" (when in (str " in " in)))
+           where (str "  " file ":" line (when column (str ":" column)))
+           form (str "  " pred-src " " arg-src)
+           under (when (and pred-col arg-col)
+                   (caret (+ 2 (- arg-col pred-col)) (count arg-src)))]
+       (join-lines
+        (remove nil?
+                [head
+                 where
+                 ""
+                 form
+                 under
+                 ""
+                 (str "  expected  " (or expected pred-src))
+                 (str "    actual  " (flint.rt/str-join (vec (interpose "  " (map render-value args)))))
+                 (when note (str "            " note))])))
+     :default
+     (throw (ex-info "checks are not enabled in this build" {}))))
+
+;; ------------------------------------------------------------------ expect
+
+;; SYNTACTIC in both variants -- `expect` stays a MACRO when checks are off,
+;; mirroring the ON variant's kind, rather than becoming an ordinary function.
+;; It is also the one name here that genuinely VANISHES: an assertion form
+;; with nothing to assert expands to a bare `nil`, so neither the predicate
+;; nor the argument forms are ever analysed -- no call, no evaluation, no
+;; image bytes, the same promise `:optimize [perf]` already made when this
+;; whole namespace used to disappear instead.
+#?(:flint/check
+   (defmacro expect
+     "Check `args` against `pred`, or throw with a message that says where.
+
+  In a build with checks on, written either bare or inside
+  `#?(:flint/check (expect string? name))` -- both work now, and the reader
+  conditional form still strips the call entirely under `:optimize [perf]`
+  the way it always did. A BARE call, with no conditional, compiles in both
+  builds: this macro's OFF variant expands it to `nil`.
+
+      (expect string? name)
+      (expect = expected actual)
+      (expect (min-length 3) name)
+
+  VARIADIC, because a predicate of one argument is a special case and not the
+  general one. The protocol takes a vector of arguments for the same reason.
+
+  The message is built from `&form`: flint's reader records `:file`, `:line`
+  and `:column` on every form AND on every sub-form, so the predicate and each
+  argument know where they were written. Nothing is embedded but the
+  expressions themselves -- there is no copy of the source line in the image,
+  and none is read back at run time."
+     [pred & args]
+     (let [fm (meta &form)
+           ;; `:child-pos` is `[line col line col ...]`, one pair per element of
+           ;; the form -- so element 0 is `expect` itself, 1 is the predicate and
+           ;; 2 is the first argument.
+           ;;
+           ;; It exists because a NUMBER cannot carry metadata, here or in
+           ;; Clojure, so `(expect string? 42)` has nowhere on the 42 to record
+           ;; where the 42 is. The collection records it instead, which is the
+           ;; difference between pointing at the offending value and not.
+           cp (:child-pos fm)
+           col-of (fn [i v]
+                    (or (:column (meta v))
+                        (when (and cp (> (count cp) (inc (* 2 i)))) (nth cp (inc (* 2 i))))))
+           site {:file (:file fm)
+                 :line (:line fm)
+                 :column (:column fm)
+                 :in (str (:ns &env))
+                 :pred-src (pr-str pred)
+                 :arg-src (flint.rt/str-join (vec (interpose " " (map pr-str args))))
+                 :pred-col (col-of 1 pred)
+                 :arg-col (col-of 2 (first args))}]
+       ;; BUILTINS, NOT `clojure.core`, in what lands in the caller: the
+       ;; expansion must mean the same in a namespace that refers nothing of
+       ;; `clojure.core` (`DECISIONS.md#four-units`), and `clojure.core/first`
+       ;; and `ex-info` are these two builtins with a var around them.
+       ;; `clojure.core/let` is the BOOTSTRAP `let`, resolved before any var is.
+       (list 'clojure.core/let ['p# pred 'a# (vec args)]
+             (list 'if (list 'flint.check/check 'p# 'a#)
+                   (list 'flint.rt/first 'a#)
+                   (list 'throw
+                         (list 'flint.rt/ex-info
+                               (list 'flint.check/failure-message
+                                     site
+                                     (list 'flint.check/describe 'p# 'a# (:pred-src site))
+                                     'a#)
+                               {:flint.check/site site}))))))
+   :default
+   (defmacro expect
+     "Checks are not enabled in this build: this expands to a bare `nil`.
+  Neither `pred` nor `args` is ever analysed, let alone evaluated -- an
+  assertion with nothing to assert costs nothing, the same promise this whole
+  namespace used to keep only by not existing at all."
+     [pred & args]
+     nil))
+
+;; ------------------------------------------------------------------ tests
+
+(defn test-var?
+  "Is this var one of the grouped checks `flint test` runs?
+
+  The compiler indexes EVERY var's metadata, not just this key -- see
+  `flint.compiler.core`. This is one client of that index; a doc generator or a
+  lint pass would be another asking the same map a different question.
+
+  IDENTICAL in both variants: it is a pure read of a var's own metadata, which
+  the compiler indexes unconditionally, so it does not depend on whether
+  checks are compiled into THIS build at all."
+  [m]
+  (boolean (:flint.check/test m)))
+
+(defn run-tests
+  "Run `tests` (`[{:var .. :fn ..}]`) and report.
+
+  Takes the registry as an ARGUMENT rather than naming it, because this
+  namespace is analysed before any namespace that could have a test in it --
+  the registry is generated last, and hands itself here.
+
+  A test passes by returning; it fails by throwing, which is what `expect`
+  does. There is no assertion count and no framework: a check that has to be
+  registered with something is a check that can be forgotten to register.
+
+  Only makes sense while checking -- there is no registry to run without it,
+  since the compiler generates `flint.check.registry` only when `:flint/check`
+  is in `features` -- so the OFF variant throws."
+  [tests]
+  #?(:flint/check
+     (loop [ts (seq tests) passed 0 failed 0 out []]
+       (if (nil? ts)
+         (let [total (+ passed failed)]
+           ;; `remove nil?`, because `when` answers nil and `str-join` wants
+           ;; strings -- which it says plainly, three frames from the `when`.
+           (flint.rt/str-join
+            (vec (remove nil?
+                         (concat out
+                                 [(str "\n" passed "/" total " checks passed")
+                                  (when (pos? failed) (str ", " failed " FAILED"))
+                                  "\n"])))))
+         (let [t (first ts)
+               r (try ((:fn t)) nil (catch Throwable e (or (ex-message e) "threw")))]
+           (if (nil? r)
+             (recur (next ts) (inc passed) failed (conj out (str "  ok   " (:var t) "\n")))
+             (recur (next ts) passed (inc failed)
+                    (conj out (str "  FAIL " (:var t) "\n" r "\n")))))))
+     :default
+     (throw (ex-info "checks are not enabled in this build" {}))))

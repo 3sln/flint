@@ -1,0 +1,250 @@
+FLF1˙deps/flint/deps/resolve.cljc¬
+The dependency PLAN: which version of what, and where it came from
+  (`DECISIONS.md#system-namespaces-and-deps`).
+
+  This is the half that decides. `flint.deps.npm`, `flint.deps.git` and
+  `flint.deps.mvn` are virtual namespaces served by the CLI, and every one of
+  them answers with EVERY match and never picks -- so version conflict is
+  resolved here, once, in one language.
+
+      Rust matches, flint decides.
+
+  That rule is not tidiness. Version arithmetic exists in two places now:
+  `semver` in the binary, comparing at fetch time, and this file, comparing at
+  plan time where the graph is. Two implementations of *which version wins* is
+  the shape `reader-tags` records going wrong -- a value only one of three readers knew
+  about -- so there is exactly one, and it is this.
+
+  ## The conflict rule, stated once
+
+  One rule for every coordinate kind, because four resolution rules is how a
+  dependency system becomes unpredictable:
+
+  1. an **override** beats everything;
+  2. otherwise the **nearest** declaration wins -- fewer hops from the root;
+  3. a tie goes to the **higher** version.
+
+  ## What is pinned
+
+  Everything. A resolved plan carries an exact version and an integrity field
+  for every node, because a build that resolves differently tomorrow is not
+  reproducible and nobody finds that out at a convenient moment.”`"1.2.3"` -> `[1 2 3]`, or nil.
+
+  Comparison only, so a pre-release suffix is DROPPED rather than ordered. That
+  is a real limitation and it is here rather than in a docstring nobody reads:
+  `1.0.0-rc1` and `1.0.0` compare equal, so a plan that mixes them picks
+  arbitrarily between them. Ordering pre-releases correctly is semver's hardest
+  corner and it is not needed to choose between released versions, which is what
+  a dependency graph almost always holds.[-+]\.\d+w-1, 0 or 1. A version that does not parse sorts BELOW one that does, so a
+  malformed tag never wins a tie by accident.{The highest of `versions`, or nil. Ties keep the first, so the answer is
+  stable rather than dependent on iteration order.óThe version a tag NAMES, as a string, or nil.
+
+  `v1.2.3`, `1.2.3`, `release-1.2.3` and `lib-v1.2.3` all name `1.2.3`. This is
+  not resolution -- nothing is asked of the network -- it is reading a tag, and
+  it is what lets two coordinates that named different tags be COMPARED.v-ªWhich sort of coordinate this is.
+
+  `flint.deps/dep-kind`, under the name this namespace calls it. The KINDS live
+  in one table (`flint.deps/coord-types`) because two copies of that list is
+  what this file used to hold and they drifted; the classifier is shared with
+  them rather than reimplemented beside them.ºA version string as a range that means ONLY that version.
+
+  This exists because of a bug it shipped with for one commit. In semver -- and
+  in npm and cargo -- a bare `1.2.0` written as a RANGE means `^1.2.0`, so
+  pinning a dependency to `1.2.0` resolved to `1.3.0` and the pin silently did
+  nothing. "Everything is pinned by default" has to be true or it is worse
+  than not claiming it.
+
+  So an exact version is asked for as `=1.2.0`, and anything already carrying an
+  operator is passed through untouched -- `^1.2`, `~1.2.3`, `>=1.0 <2.0` all
+  mean what they say.\d+(\.\d+)*=ÇEvery version of `nm` matching `c`, and the one this plan picks.
+
+  The server returns all matches; the pick is the HIGHEST, here.*⁄	A git coordinate: `:git/tag` and `:git/sha`, as canonical `deps.edn` has them.
+
+  **`:git/version` is gone**, and its removal is worth recording because it was
+  built first. A semver range over tags looked like the obvious improvement on
+  canonical `deps.edn`, and it is the wrong shape for the problem it was aimed
+  at. Two reasons:
+
+  1. **It makes every build a resolution.** A range asks the network what the
+     newest matching tag is, so what a checkout means depends on when it ran --
+     which is the objection this project already raises to a git branch.
+  2. **It solved the wrong half.** The thing that actually hurts is not naming a
+     version, it is two dependencies that named DIFFERENT tags of the same
+     repository. A range does not answer that; it just gives each of them a
+     different way to be right.
+
+  So a coordinate names a tag, exactly as it always did, and the disagreement is
+  handled where it happens -- see `tag-conflicts` and `agree-on-tag` below.
+
+  `:git/sha` beside a tag is INTEGRITY: the tag must resolve to that commit or
+  the plan is refused, and a prefix compares as a prefix so the familiar
+  7-character form works. A bare `:git/sha` with no tag is canonical too, and is
+  taken as given.: :git/sha  does not match the resolved commit at COne coordinate, resolved to something exact. nil when flint cannot.ÁWhat a resolved node depends on, as `{name coord}`.
+
+  THE TRANSITIVE STEP, for the kinds that can answer WITHOUT the thing being on
+  disk. A registry knows what a package depends on before anybody downloads it:
+  npm says so in the packument, and maven serves the POM beside the jar. That
+  is what lets this walk pin a graph -- `flint deps tree`, `why`, `pin` -- with
+  nothing fetched at all.
+
+  The other kinds genuinely cannot answer here, and the docstring this replaces
+  said something that was not true: it claimed a git dependency's `deps.edn`
+  was "read by the CALLER after fetching", which described a mechanism this
+  namespace's callers do not have. What actually reads it is
+  `flint.deps/fetch-plan`, the other half of the same walk, which has the
+  checkout and reads every format through `flint.deps.manifest`. So there is
+  one piece of format knowledge and two callers of it, rather than two
+  transitive mechanisms -- and the POM reader here is that same one.
+
+  A function that quietly downloads is one nobody can reason about, so nothing
+  here fetches: `npm/manifest` and `mvn/pom` are metadata reads.±Resolve `deps` to a pinned graph.
+
+  `deps` is `{name coord}` as `deps.edn` writes it; `overrides` is
+  `:flint/overrides`, and an entry there beats every declaration at any depth.
+
+  Returns `{:nodes {name node} :order [name ..] :refused [..]}`. A coordinate
+  flint cannot resolve is REPORTED rather than thrown on, for the same reason
+  `project/collect` reports a missing namespace: whether it is fatal is the
+  front end's call.$flint cannot resolve this coordinateÈA plan as the `:flint/overrides` map that would reproduce it exactly.
+
+  This is what `flint deps pin` writes. Overrides rather than a second lockfile,
+  because pinning a transitive and forcing a version are the same operation and
+  should not have two spellings -- and because a pin in the same language as the
+  declaration is one a person can read and edit.úThe plan as indented lines: what is reached, and how deep.
+
+  Depth rather than parentage, because `plan` records the depth a node was
+  REACHED at -- which is what the conflict rule uses -- and inventing a parent
+  edge to draw would be drawing something the resolver did not decide. ?  note:  -- óWhy `target` is in the plan: the declaration that reached it, and at what
+  depth. Empty when it is not in the plan at all, which is itself the answer.  -- declared directly  -- reached at depth ÍThe range to look in when bumping `current` by `level`.
+
+  * `nil`   -- stay inside whatever the declaration already said;
+  * `:patch` -- `>=1.2.3 <1.3.0`;
+  * `:minor` -- `>=1.2.3 <2.0.0`;
+  * `:major` -- `>=1.2.3`, which crosses one and is why the CLI asks first.
+
+  Built from the CURRENT version rather than from the declared range, because
+  "bump" means *move forward from where I am*, and a declaration of `^1.0` on
+  a project pinned at `1.2.3` should not offer to move to `1.0.9`.>=, <..0.0.0æWhat `flint deps bump` would change: `[{:dep :from :to :crosses-major?}]`.
+
+  Reported rather than applied, and the CLI decides what to do about it. A
+  dependency already at the newest matching version is simply absent from the
+  result, so an empty answer means "nothing to do" rather than "nothing was
+  looked at".ÕTwo spellings of one repository. `https://github.com/org/x`,
+  `https://github.com/org/x.git` and a trailing slash are the same place, and a
+  conflict detector that missed that would miss the common case./.git£Every repository that two coordinates named DIFFERENT tags of.
+
+  `deps` is `{name coord}` -- both the declared ones and whatever a transitive
+  walk added, because the case that matters is a direct dependency and a
+  transitive one disagreeing.
+
+  Returns `[{:url :wanted {tag [dep ..]} :versions {tag version-or-nil}}]`,
+  empty when everybody agrees. A repository named once, however many times, is
+  not a conflict.∞The tag a conflicted repository should settle on, or nil.
+
+  **The HIGHEST version among the tags already asked for**, and nothing else --
+  it does not go to the network and does not invent a tag nobody named. That is
+  deliberate: choosing a version none of the dependencies asked for is a
+  decision nobody made, and the point here is to find agreement rather than to
+  upgrade.
+
+  nil when the tags carry no version to compare -- two branch-ish tags, say --
+  because there is nothing to be right about and a guess would be worse than
+  the honest refusal.§What `flint deps agree` would do: one row per conflicted repository.
+
+  `[{:url :from {tag [dep ..]} :to tag :sha sha}]`, and `:to` is nil when the
+  tags cannot be compared. The SHA is resolved for the chosen tag, so the
+  overrides this produces carry the integrity that `system-namespaces-and-deps` says a pin must --
+  which is the other half of the request: agree on a tag, then update the
+  truncated sha to match.ŒThe highest version tag a repository has, as `{:tag :version :sha}`, or nil.
+
+  What `flint deps add git:...` uses to choose ONCE. Resolution at ADD time is
+  a decision somebody made and a tag it wrote down; resolution at BUILD time is
+  what `:git/version` was and is what makes a checkout mean different things on
+  different days.optsfilefeaturesanytagsdialectportablecondsnsflint.deps.resolverequireclojure.stringasstr
+flint.depsdepsflint.deps.manifestmanifestflint.deps.npmnpmflint.deps.mvnmvnflint.deps.gitgitdefnparse-versionletcorefirstsplitflintregexpartswhenandseqevery?fnp
+re-matchesmapv
+parse-longversion-compareabpapbcondnil?elseloopixnthycount<>recurinchighestversionsreducebestiforpos?tag-version-stringtagtstripstarts-with?subscandlast-index-ofdef
+coord-kinddep-kindexact-rangetrimresolve-npmnmcrangeversionhitsresolvenamepicklastkind	integrity
+candidatesresolve-giturlwant-shasome->shapickedresolve-tagnotthrowex-infodepexpectedactualresolve-onecaselocalrootpodblank?pathdefn-deps-ofnodemacceassockeyvalpomtrycatch	Throwable_pom-xmlplan	overridesnotesif-letncoord-notesconjnotequeuenodesorderrefusedempty?coorddepthrest*vecrestgetseen<=rerror
+ex-messagereasoncoord-complaintkidsinto	contains?pinscond->
+tree-linesapplyrepeat	why-linestargetzero?
+bump-rangecurrentlevelmajmin*patchminormajor	bump-planrange*newestfromtocrosses-major?not=url-keyu
+ends-with?dec
+lower-casetag-conflictsby-url	update-inxsforwantedkeysagree-on-tagconflictts	versionedfiltervtag-agreement
+newest-tagrowsÍ23456789 : ;< => ? @ A B C D E F G H I J K 	 L M N?OPQ R S T U V W X Y Z [ \ ] ^ _ ` a bc d e f g h % i j k l m n o p q r s t u v w x?y z {?| } ~A Ä?Å Ç É Ñ ÖEÜ áEàEâ ä ãåEâÜçé è êIê ë íIì îIvvìIï ñ ó òôöõIê ú ùûüûüGGÜ†?°†¢†Ü £ § • ¶EC ß ® © ™ ´A ¨ ≠G¨ Æ Ø ∞C± ≤ ≥ ¥ µ ∂A∑ ∏π ∫ ª º Ω æªºΩ¥ ø ¿ ¡ ¬ √ ƒ ≈ ∆¿ «» … AÀ  Ã Õ Œ œEç –IÜ — “ ”  ‘ ’ ÷ ◊ ÿ Ÿ ⁄ €‹›ﬁ ﬂ å ‡Ià ·‚„‰ Â Ê Á?Ë È 
+?Í Î Ï Ì Ó Ô 6So Ò Ú Û Ù ı ˆ ˜ „ ¯ ˘I6
+ 
+  	    	>
+ 	  ! 	   	  & "	  ! 	  ! 	  !    	   	 	       ! % ( 
+	       % 
+ !  "  #    $ $ %% (	 )& , -' 8 
+ ?& C  (  % 	 &  ) !& %   *	 + ,  	 	-   + . ! " 0,	 / "  0 -  0 .  0 - 0 .1 2 	 3  	 
+ 	 4  5 - 3   6   !5 %. (3  *	 / "  7 3  8 - $ %7 (3 * +8 1.  9 4 6 : 4 61 ;  < 37!  =	 > ?  % 	 @  A  B  0 @ ! "C ' (* 8 :@ B D@ >  D	 E  	 	F   E	G  % 	 4  A  H -4	 / 4 5I :4 < ?4	J  A   ! "G (F G F  	 3  K +F
+ - ! 3  G ! "I 'F ) *< .3 !  " J   $J +J L MN  O	   	 	  P    A 	 
+'  
+ $ ' ( 0 , 3  Q	 R S  	 	T  O  B  U .S ! 1	V  W     !B $X /S % 2R 7T !  # V  	 Y  Z V	 
+[\]   B X $S  'R^^ Y __ !Y ` (^ %V   a.	 R S  	 	b   c S 	d  e f $S  '	g	 
+/h S  
+i   h  S j k "b & ' +h 5S ,^ D ) * .h 8S /d  
+j di ^  ! g !  " d j !g  l  H ) * .j 4g / =d l  H )d 2 3 7j =g 8	 
+m  n   R /d B "i (g # 0j $g  ! 8G 
+o Rp ,dq =j Cg > 
+[r]  Rsb^^ g ii g jj g   t	 R S u 	 
+M S\
+ Q R Sr
+ a R Sv 
+[v]   ! %Rw / 0 4x AS 5y
+ 
+[y]   !R^ . / 3z AS 4{
+ A  |   } *S   
+[{]   #R^ 0 1 5~ CS 6 
+[{]   #Rw - . 2} =S 3 $
+  Ä(	 Å u 	[ Å 
+\
+  	 Ç  É  ] 'Å ! -^ 7Å . ?  % 	 Ñ Ö   !Ü 'Ñ + ,á 0Ö 3 
+U A Bà FÖ 
+   B â "Ç  % 
+ y
+  	 ä  ã  å "] )Å # /^ 9Å 0 ç  é *è  , A ä â  ê -ä  3 
+  
+   ë 	   ë   
+  	  
+í
+  		 
+ì  ?  % 	 Ñ !Ö î "	 #ï % &ñ 7 8à <Ö ó "Ñ & 
+o , - 1 2á 6Öò @ïÑ 	   2 
+	 ô  (  % 	 Ö 	   !á %Ö ( )à -Ö  0 4ö  
+ õ  	 ú  	  A 
+ ù ô 
+û öü õ† ,ú° ;ì 	 	 	 R ¢ £    &ô§  •  ¶ ô¢  B  ß í 'R +¢®  ß ö R
+ / " ®  © ™ "®  (£ ; § ö õ %ú1  	 ´  ã  t &R )¢ ç  é *Ö , 
+¨ 4 5≠ @Ö / 0 ´ ; § ö #õ
+ ó ú % 
+o +RÆ. /B 2 3Ø H¢2¨ ´  ; § ö #õ ) *ó /ú 7 
+o =RÆ H¨ P´ I1  	 ´  Ü ´™ (£ !´  A  " !® & '∞ )™ 1® * 7£! "C ' (* 8 9 =^ G® >8 9 =^ G´ >® ´±  ( ! "% %	 &Ö )	 * +á /Ö 2 3à 7Ö : ;< ?£ H IÄ Q´ ;  ≤ § %± Ü  ö &R )´ A  ≥ (ö .R 2õ 8 9ó >õ DRú
+  ¥	 & ?  % 	 Ç R  	 ï  ß û "&  %R Ü Ç R u [ #ï \ 
+U +^ 5ï ,µ G_ Sï Hr ∂ % 
+c /s 5ï 0f Aj Gï B^ )ï   , -Ü∑ @^ Jï A 3i %ï   ( )Üh 8i >ï 9 /y 
+z +^ 5ï ,v 
+x ,w 3ï -{ A !w (ï " 
+} *w 1ï + 
+~ -^ 7ï . 
+ 
+ 
+  ü &    ∏	 & ≤ ( 
+ % 	 R  	 ï  ß û  &  #R   π   ∫ % &ª *™ 2ï  + 4 ( 8R  B ^ 'ï  *j 0ï + 3w :ï 4 = !  ∞r  [ 'ï !  + , 5s ;ï 6 0	ü & 
+ ( 
+ % 	 4    o &4 !  0ò 74 1  ) <° D& =  º!	 & Ω  	 	ï  ß û &  Ω A 	 
+0 ï 	 	  	 Ω  B ^ &ï  )j /ï * A  æ ™  ï   "" # -™ 5ï .    ø$	 ¿ ¡  	 	   ¿ !   	 	 ¬ √ è 	  5     " $ ' (5 ,  . 0 3 45 8  : <		 
+u ¡ƒ % ¿& *¬' 2 3< 7√(  $ . =≈ % ¿& * +< /¬)  $ 4∆ % ¿  
+  «* 	   «    	  
+¡  ? % 		 
+Ñ Ö  	 R  á Ö ¢  à #Ö»  M ¢¿    B U ,¢  3∑ A¢ 4z ,¢ …  B  ø $¿ ,¡ 3¿V  u »\ W & ' + ,B /X :¢ 0 AR F…r   & ' +c 5¢ , =… 	 À ^  Z $V 	 
+A  " À  C   * 0À 7¿ ó Ñ  
+o RÃ $¿Õ 0ÀŒ& 'œ , - 3 4 B¿, - 3 4 BÀÑ 	   –+	 b  	 	—  P   b	—  A  “ —, ! & 'I ,—  0 1” 5 68 <— . A—	—  A  “ —- ! ) *I /—  3 4‘ 6 78 =— @ 1 D— ’ —  ÷.	   	 	◊  ?  % 	 Ç Ö  	  R # $á (Ö +S - .à 2Ö A   !" % &∞r - .M 9S ( =h GS > Jc TS K ÿ )Ç +	 , -– 5c ?S 6 C D Hh RS I) *% -	 .Ÿ 2 3ó 8 9B <Ÿ ? 	  CRÇ 
+   • 
+ ⁄ 	 	 — € ◊‹ :  8  € & 
+s —›€ﬁ ?   % #	 $Ç &F ) *Ü 0Ç 2F 4 5D HF M 
+  P Qﬂ V€  ‡/	 ·  	 	‚  ﬂ › · 	„  ‰  %  	 !F $ %ß )ﬁ 4· * >F B‚ !  # „ ?  % 	 @ F A  B  0 @ C   * 0 1ß 5ﬁ @· 6 JF0 1ß 5ﬁ @· 6 J@F @ „
+  Â0	  ?  % 	 Ñ S  	 Ê  ‡ $S ó Ñ  
+s s %S  Ã › )S !ÕÊj  ! %Ê ( )k 9s ?S : BÊ 	   ÷   Á1	 b  	 	Ë  È b	@  ?  % 	 @  ´  	    !D 4i :´ 5	 / 0 " %@ 0 "@ ( )Ü /´^ : 1 C " #* 3 5^ ?@ 6 G HÜ N´^ Y P1"@ Ë@

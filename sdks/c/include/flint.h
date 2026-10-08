@@ -36,17 +36,23 @@ void flint_string_free(char *s);
 
 /* --- the compiler ------------------------------------------------------- */
 
+/* Which dialect a source is written in (DECISIONS.md#dialects-and-preludes):
+ * portable (.cljc/.clj) or flint-only (.fln). It is the RESOLVER's to say. */
+typedef enum { FLINT_DIALECT_PORTABLE = 0, FLINT_DIALECT_FLINT = 1 } FlintDialect;
+
 /* How a namespace becomes source.
  *
  * There is no filesystem here: a resolver is asked for a namespace such as
  * "my.app.core" and answers with source or with nothing, which is what lets a
  * caller compile out of a database, a zip, or memory. Return 0 for "no such
- * namespace"; return nonzero and set *out to NUL-terminated source.
+ * namespace"; return nonzero, set *out to NUL-terminated source, and set
+ * *dialect to the dialect it is written in -- left alone, it is
+ * FLINT_DIALECT_PORTABLE.
  *
  * *out must stay valid until the resolver is called again or compilation
  * returns. flint copies it before asking for anything else.
  */
-typedef int (*FlintResolver)(void *ctx, const char *ns, const char **out);
+typedef int (*FlintResolver)(void *ctx, const char *ns, const char **out, FlintDialect *dialect);
 
 FlintCompiler *flint_compiler_new(char **err);
 void flint_compiler_free(FlintCompiler *c);

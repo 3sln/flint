@@ -11,7 +11,7 @@
   emitter, macro evaluation -- is all in here."
   (:require [flint.compiler.core :as compiler]
             [flint.compiler.image :as img]
-            [flint.compiler.reader :as reader]
+            [flint.compiler.forms :as forms]
             [flint.compiler.resolve :as project]
             [flint.compiler.wasm :as w]
             [flint.compiler.bundle :as bundle]
@@ -71,15 +71,53 @@
   19.1 M, measured 2026-10-01), and an encoded string is decoded natively."
   (atom nil))
 
+(declare base64-decode)
+
+(defn- preread-bytes
+  "A body's `:preread`: bytes as they arrived, or base64 TEXT decoded -- the
+  form `bin/flint --emit-spec` writes, since an EDN spec has nowhere else to put
+  bytes."
+  [body]
+  (if (and (map? body) (string? (:preread body)))
+    (assoc body :preread (base64-decode (:preread body)))
+    body))
+
 (defn- read-spec
-  "The spec, read from EDN, with any encoded file bodies merged into `:files`.
+  "The spec, as a value, with any encoded file bodies merged into `:files`.
   EVERY mode reads its spec through here, so the split path is one mechanism
-  and not one variant per target."
-  [spec-edn]
-  (let [spec (reader/read-one spec-edn)
-        files @pending-files]
-    (reset! pending-files nil)
-    (if files (update spec :files merge files) spec)))
+  and not one variant per target.
+
+  THE SPEC ARRIVES READ (`DECISIONS.md#one-reader-and-no-other`): a host reads
+  the EDN with the kin reader, the same reader it reads source with, and hands
+  over the `flint.forms` bytes -- or, from a caller that can build one, the map
+  itself. The compiler reads no text, so a spec handed over AS text is refused
+  by name rather than misread."
+  [spec-in]
+  (let [spec (cond
+               (map? spec-in) spec-in
+               (string? spec-in)
+               (throw (ex-info (str "the spec arrived as text, and the compiler reads no text: read it"
+                                    " with the kin reader and pass the flint.forms bytes"
+                                    " (DECISIONS.md#one-reader-and-no-other)")
+                               {:type :reader}))
+               :else (first (:forms (forms/decode spec-in))))
+        files @pending-files
+        _ (reset! pending-files nil)
+        spec (if files (update spec :files merge files) spec)]
+    (cond-> spec
+      (:files spec) (update :files (fn [fs] (into {} (map (fn [e] [(key e) (preread-bytes (val e))]) fs))))
+      ;; A RESOLVED spec's sources are decoded here, under the spec's own
+      ;; features, so `compile-image` is handed forms like every other path.
+      (:sources spec)
+      (update :sources
+              (fn [ss]
+                (let [features (or (:features spec) forms/default-features)]
+                  (into {} (map (fn [e]
+                                  (let [v (preread-bytes (val e))]
+                                    [(key e) (if (and (:preread v) (not (:forms v)))
+                                               (assoc v :forms (project/read-entry v features))
+                                               v)]))
+                                ss))))))))
 
 (defn ^:internal compile-to-base64
   "`spec` is EDN: {:sources {ns {:src .. :file ..}} :order [..] :entry ns/fn
@@ -164,7 +202,7 @@
   Answers `{:missing ..}`, `{:refused ..}` or `{:builder ..}`."
   [spec builtins]
   (let [files (:files spec)
-        features (or (:features spec) flint.compiler.reader/default-features)
+        features (or (:features spec) forms/default-features)
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
         ;; The namespace RESOLVER (`DECISIONS.md#workspace-capabilities`). This used to be a
@@ -272,7 +310,7 @@
        :entry my.app/main
        :builtins #{..}
        :workspaces [{:prefix \"vendor/foo/\" :name foo/bar :tags {t f}} ..]
-       :features flint.compiler.reader/default-features}
+       :features forms/default-features}
 
   `:workspaces` says who OWNS which files, first matching prefix winning. It is
   how a caller with no filesystem says what the CLI reads off a source root:
@@ -652,41 +690,6 @@
                     (jvm/emit image opts)
                     (jvm/pack base image opts))})))))
 
-(defn ^:internal preread
-  "Every file in the spec READ AHEAD OF ITS FEATURES, as `{path bytes}` -- what
-  the native CLI embeds for the standard library so that a compile does not
-  read it again (`DECISIONS.md#stdlib-preread`).
-
-  Each file is asked exactly the question a compile asks of it,
-  `flint.compiler.resolve/file-answer` over the spec's `:files` and `:workspaces`, and
-  read by `flint.compiler.reader/read-deferred`, which keeps reader conditionals as
-  data: one read serves the default build, `:optimize [perf]` and any explicit
-  `:features`. The bytes are `flint.compiler.forms`'s, which carry every form's
-  position metadata and the options the read was made under, which a compile
-  checks before it uses them.
-
-  A spec with `:features` reads EAGERLY under that set instead
-  (`flint.compiler.resolve/read-eager`) -- the bytes a host-side reader must reproduce,
-  which is what the kin reader's conformity guard compares against
-  (`cli/src/kin_reader_test.rs`). With `:guard` a file that does not read
-  answers `{:error message}` in place of its bytes, so one bad fixture does
-  not hide the rest; the build's own pre-read keeps throwing."
-  [spec-edn]
-  (let [spec (read-spec spec-edn)
-        files (:files spec)
-        features (:features spec)
-        guard? (contains? spec :guard)]
-    {:preread
-     (into {} (map (fn [path]
-                     (let [a (project/file-answer files (:workspaces spec) path)
-                           read (fn [] (if features
-                                         (project/read-eager a (set features))
-                                         (project/preread a)))]
-                       [path (if guard?
-                               (try (read) (catch Throwable e {:error (ex-message e)}))
-                               (read))]))
-                   (keys files)))}))
-
 (defn- image-artifact
   "The bare bytecode image -- `:target :image`, what `flint run` loads -- with
   the native import order beside it, as `compile-project-spec` answers it."
@@ -702,16 +705,19 @@
 (defn- answer-forms
   "One element of the host's answer with its file READ: `:forms` bytes (the
   `flint.compiler.forms` encoding, checked against the options this compile reads
-  under, `flint.compiler.resolve/read-entry`) or, until hosts read user text
-  themselves, `:source` text -- either way `:forms` comes out as forms, which
-  is all `flint.compiler.resolve/Resolver` speaks. A read that fails is the element's
+  under, `flint.compiler.resolve/read-entry`); `:forms` comes out as forms,
+  which is all `flint.compiler.resolve/Resolver` speaks. `:source` TEXT is
+  refused: every host reads with the kin reader
+  (`DECISIONS.md#one-reader-and-no-other`). A read that fails is the element's
   `{:error ..}`, positioned, rather than a throw that would lose the others."
   [a features]
   (if (or (nil? a) (:virtual a) (:error a))
     a
     (try
       (assoc (dissoc a :source)
-             :forms (project/read-entry (assoc a :src (:source a) :preread (:forms a)) features))
+             ;; `:source` TEXT IS REFUSED, by `read-entry`: the compiler reads
+             ;; none (`DECISIONS.md#one-reader-and-no-other`).
+             :forms (project/read-entry (assoc a :preread (:forms a)) features))
       (catch Throwable e
         (let [d (ex-data e)]
           {:error (cond-> {:message (ex-message e)}
@@ -769,7 +775,7 @@
        :entry    my.app/main
        :roots    [ns ..]          optional; replaces the entry as the start
        :exports  [sym ..]
-       :features #{:flint ..}     the read features; default flint.compiler.reader/default-features
+       :features #{:flint ..}     the read features; default forms/default-features
        :target   :image | :wasm | :llvm | :clr | :jvm     (default :image)
        :aot bool :shake bool :meta {..}
        :slots    {\"name\" n}     or :builtins #{..}
@@ -791,7 +797,7 @@
   cannot build different artifacts from the same answers."
   [request resolver]
   (try
-    (let [features (or (:features request) reader/default-features)
+    (let [features (or (:features request) forms/default-features)
           entry (:entry request)
           r (project/resolve-project-waves resolver (symbol (namespace entry)) features
                                            (:roots request))]
@@ -856,7 +862,7 @@
 
        On the port the compiler sends `{:id (:id request) :want [ns ..]}` and
        the host answers a vector parallel to `:want` whose elements are nil (not
-       found), `{:forms bytes | :source text :file .. :dialect .. :workspace ..
+       found), `{:forms bytes :file .. :dialect .. :workspace ..
        :grants .. :guard .. :prelude .. :tags ..}`, `{:virtual true :vars ..
        :workspace ..}`, or `{:error {:message .. :file .. :line .. :column
        ..}}` -- the protocol's answer with the forms still ENCODED, which
@@ -864,7 +870,7 @@
        [request resolver]
        (compile-with request
                      (port-resolver (:id request) resolver
-                                    (or (:features request) reader/default-features))))))
+                                    (or (:features request) forms/default-features))))))
 
 (declare main*)
 
@@ -899,7 +905,7 @@
         ;; there, so the target was listed in both lists above and still could not
         ;; work from the native CLI.
         known? (or (= mode "project") (= mode "wasm") (= mode "llvm")
-                   (= mode "clr") (= mode "jvm") (= mode "preread"))
+                   (= mode "clr") (= mode "jvm"))
         [mode spec-edn] (if known? [mode (second args)] ["spec" mode])
         r (cond
             (= mode "wasm") (compile-to-wasm spec-edn (nth args 2 ""))
@@ -911,9 +917,6 @@
             (= mode "clr") (compile-to-clr spec-edn (nth args 2 ""))
             (= mode "llvm") (compile-to-llvm spec-edn)
             (= mode "project") (compile-project spec-edn)
-            ;; Not a target: the standard library read, for the native CLI's
-            ;; build to embed (`DECISIONS.md#stdlib-preread`).
-            (= mode "preread") (preread spec-edn)
 
             :else (compile-to-base64 spec-edn))]
     (cond
@@ -938,9 +941,6 @@
       ;; A module comes back alone: its native slots are already in it, so
       ;; there is no import order for the host to apply.
       (:module r) (:module r)
-      ;; THE ONE ANSWER THAT IS NOT A STRING: `{path bytes}`, each file's
-      ;; forms in `flint.compiler.forms`'s encoding (`preread`).
-      (:preread r) (:preread r)
       ;; `:clr` -- AND THIS ARM WAS MISSING, so `:to :clr` through the
       ;; SELF-HOSTED compiler had never once worked. `compile-to-clr` answers
       ;; `{:clr bytes}` and its own docstring says "Bytes out, so the caller

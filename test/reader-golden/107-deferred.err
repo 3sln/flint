@@ -1,0 +1,1 @@
+read error: unknown character literal \foo (test/reader/err-bad-char.cljc:1:5)

@@ -106,7 +106,7 @@ fi
 CP=$(tail -1 "$CPFILE")
 #
 # STDERR IS FILTERED, not piped straight through (and not `exec`ed, for the
-# same reason): loading `flint.rt`, `flint.compiler.reader`, `flint.compiler.macros` and
+# same reason): loading `flint.rt`, `flint.compiler.forms`, `flint.compiler.macros` and
 # `flint.compiler.clr` under PLAIN Clojure prints fifteen `WARNING: x already refers
 # to ...` lines -- each one a local `def` shadowing something `clojure.core`
 # already refers in, which babashka never warned about and the JVM compiler

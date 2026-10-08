@@ -39,6 +39,26 @@ pub(crate) fn read_forms(name: &str, text: &str, how: &ReadAs) -> Result<Vec<u8>
     hostread::read_text(&mut rt, name, text, &shared).map_err(|e| e.message)
 }
 
+/// `text`, read as the file `name` under `features` (`None` reads DEFERRED),
+/// `tags` and the dialect, as `flint.forms` bytes -- or the read error, with its
+/// position, for the compiler to report if it reaches the namespace.
+pub(crate) fn read_text(name: &str, text: &str, features: Option<&[&str]>,
+                        tags: &[(String, String)], portable: bool)
+                        -> Result<Vec<u8>, hostread::ReadError> {
+    let tags: Vec<(&str, &str)> = tags.iter().map(|(t, v)| (t.as_str(), v.as_str())).collect();
+    let shared = Shared { features, tags: &tags, portable };
+    let mut rt = Rt::new();
+    hostread::read_text(&mut rt, name, text, &shared)
+}
+
+/// A SPEC's EDN, READ (`DECISIONS.md#one-reader-and-no-other`): the compiler
+/// takes its spec as `flint.forms` bytes and reads no text, so the door that
+/// renders the spec reads it, with the same kin reader it reads source with.
+pub(crate) fn read_spec(text: &str) -> Result<Vec<u8>, String> {
+    read_text("spec.edn", text, Some(&[]), &[], true)
+        .map_err(|e| e.message)
+}
+
 /// The `(tag, var)` pairs of a `:flint/tag-readers` block's inner text, when it
 /// is nothing but symbol pairs -- `None` for anything else, which the caller
 /// leaves to the compiler to read rather than guess at.

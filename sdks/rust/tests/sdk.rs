@@ -26,7 +26,7 @@ fn image() -> flint::Image {
     let compiler = Compiler::embedded().expect("the compiler is embedded");
     compiler
         .compile(Compile {
-            resolve: &|ns: &str| if ns == "app" { Some(APP.to_string()) } else { None },
+            resolve: &|ns: &str| if ns == "app" { Some(flint::Source::portable(APP)) } else { None },
             fn_name: "app/main",
             exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/churn", "app/tabled"],
             meta: vec![("capabilities".into(), Value::Vector(vec![Value::str("fs")]))],
@@ -552,4 +552,35 @@ fn a_table_returns_as_a_table() {
     };
     let got = sandbox.call_blocking("app/echo", &[table.clone()]).unwrap();
     assert_eq!(got, table, "a table crosses both ways as a table");
+}
+
+/// THE RESOLVER SAYS THE DIALECT (`DECISIONS.md#dialects-and-preludes`), and
+/// the compiler acts on it: `defalias` is flint-only, so the same library text
+/// compiles when its resolver answers it as `.fln` and is refused, naming the
+/// dialect, when answered portable. The pair differs in nothing else. Before
+/// 2026-10-08 the hook returned bare text and every embedder's namespace was
+/// labelled `.cljc`, so the first half could not be written.
+#[test]
+fn the_resolver_says_the_dialect() {
+    const LIB: &str = "(ns my.lib)\n(defn- twice [x] (* 2 x))\n(defalias dbl my.lib/twice)\n";
+    const USE: &str = "(ns app (:require [my.lib]))\n(defn main [_] (my.lib/dbl 21))\n";
+    let compile = |lib: flint::Source| {
+        let resolve = move |ns: &str| match ns {
+            "app" => Some(flint::Source::portable(USE)),
+            "my.lib" => Some(lib.clone()),
+            _ => None,
+        };
+        Compiler::embedded().unwrap().compile(Compile {
+            resolve: &resolve,
+            fn_name: "app/main",
+            ..Default::default()
+        })
+    };
+    let img = compile(flint::Source::flint(LIB)).expect("a .fln may use defalias");
+    let sb = img.sandbox().unwrap();
+    assert_eq!(sb.call_blocking("app/main", &[Value::Nil]).unwrap(), Value::Int(42));
+    match compile(flint::Source::portable(LIB)) {
+        Err(e) => assert!(e.to_string().contains("defalias is flint-only"), "{e}"),
+        Ok(_) => panic!("a portable source was allowed defalias"),
+    }
 }

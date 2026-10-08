@@ -2,6 +2,8 @@
 // spec is far larger than an argv entry.
 import { readFileSync } from 'fs';
 import { instantiate } from './flint.mjs';
+import { codec } from '../sdks/esm/src/codec.js';
+import { readSpec } from './spec.mjs';
 
 const [, , wasmPath, argPath, fnArg] = process.argv;
 // THE FUNCTION, named. A module has no entry point (`DECISIONS.md#structured-ports`
@@ -17,8 +19,15 @@ const inst = instantiate(module);
 // `memory access out of bounds` with nothing pointing at the cap. The compiler
 // grew past it the day it started carrying the wasm writer.
 if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(3_000_000_000);
-const arg = readFileSync(argPath, 'utf8');
-const r = inst.run(fn, [arg]);
+// THE SPEC READ HERE, not by the compiler (`host/spec.mjs`).
+const spec = readSpec(readFileSync(argPath, 'utf8'), argPath);
+let r;
+try {
+  const v = inst.call(fn, [codec.vec([codec.bytes(spec)])]);
+  r = { code: 0, out: v === null || v === undefined ? '' : String(v) };
+} catch (err) {
+  r = { code: 1, out: err.kind ? `${err.kind}: ${err.message}` : String(err.message ?? err) };
+}
 // `process.exit` does not flush an async write to a pipe: anything past the
 // pipe buffer (64 KiB here) is silently lost. Set the code and let node drain.
 process.exitCode = r.code;

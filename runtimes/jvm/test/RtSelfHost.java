@@ -84,6 +84,19 @@ public class RtSelfHost {
     int mi = a.length > 2 ? rt.push(Str.of(rt, a[2])) : -1;
     int si = rt.push(Str.of(rt, new String(Files.readAllBytes(Path.of(a[0])),
                                            java.nio.charset.StandardCharsets.UTF_8)));
+    // READ HERE, not by the compiler (`DECISIONS.md#one-reader-and-no-other`):
+    // the kin reader turns the spec's EDN into `flint.forms` bytes, which is
+    // what `flint.compiler.selfhost/main` takes. `com.flint.Compiler.run` does
+    // the same for the SDK.
+    {
+      long fi = Str.of(rt, "spec.edn");
+      long read = com._3sln.flint.kgen.rt.Formsenc.readForms(rt, rt.r(si), fi, Val.NIL, Val.NIL, true, 0L);
+      if (!com._3sln.flint.kgen.rt.Bytecore.isBytes(rt, read)) {
+        System.out.println("  FAIL the spec does not read: " + rt.describe(read));
+        System.exit(1);
+      }
+      rt.setR(si, read);
+    }
     // A LIST CONTAINING the spec, not the spec. `selfhost/main` takes an
     // argv and dispatches on its FIRST element, so handing it the string bare
     // made `(first spec)` the one-character string `{` -- and the reader then

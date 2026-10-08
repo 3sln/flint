@@ -1,0 +1,1 @@
+read error: reader tag must be a symbol (test/reader/err-tag-nonsym.cljc:1:5)

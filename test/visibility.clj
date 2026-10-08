@@ -23,6 +23,13 @@
 (require '[babashka.fs] '[flint.compiler.resolve :as project] '[flint.compiler.core :as compiler]
          '[clojure.string :as str])
 
+;; THE FILES ARE READ BY THE HOST'S READER and handed over as bytes, as every
+;; door hands them now: the compiler reads no text
+;; (`DECISIONS.md#one-reader-and-no-other`).
+(load-file "test/hostread.clj")
+(defn files-resolver [files ws]
+  (project/files-resolver (hostread/read-files files ws) ws))
+
 (def fails (atom 0))
 (defn check [label ok detail]
   (if ok
@@ -44,7 +51,7 @@
   "`:refused` when visibility stopped it, `:other` for any other error,
   `:compiled` when it went through."
   [files ws]
-  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) ws) 'app.main #{:flint})]
+  (let [r (project/resolve-project (files-resolver (merge callentry-stub files) ws) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :entry 'app.main/main})
@@ -194,7 +201,7 @@
 ;; And the real library still compiles, which is the check that would have
 ;; caught `protocol-miss` had it existed first.
 (let [r (try (project/resolve-project
-              (project/files-resolver
+              (files-resolver
                {"a/main.cljc" "(ns a.main) (defprotocol P (m [x])) (defn main [_] 1)"} nil)
               'a.main #{:flint})
              (catch Exception _ nil))]
@@ -236,7 +243,7 @@
   first run of the rows below did exactly that and had to be redone."
   ([files ws] (guard-outcome files ws #{}))
   ([files ws builtins]
-  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) ws) 'app.main #{:flint})]
+  (let [r (project/resolve-project (files-resolver (merge callentry-stub files) ws) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :builtins builtins
@@ -368,7 +375,7 @@
 ;; -- so `*x*` compiled to an ordinary var read that ignores every `binding`
 ;; around it, and `binding` itself refused the var for not being dynamic.
 (defn dyn-outcome [files]
-  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) []) 'app.main #{:flint})]
+  (let [r (project/resolve-project (files-resolver (merge callentry-stub files) []) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :entry 'app.main/main})
@@ -401,7 +408,7 @@
 ;; it did not, resolving it is the first thing that happens. That difference is
 ;; the whole test, and no other error can imitate it.
 (defn mac-outcome [files]
-  (let [r (project/resolve-project (project/files-resolver (merge callentry-stub files) []) 'app.main #{:flint})]
+  (let [r (project/resolve-project (files-resolver (merge callentry-stub files) []) 'app.main #{:flint})]
     (try
       (compiler/compile-image {:sources (:sources r) :order (:order r)
                                :entry 'app.main/main})

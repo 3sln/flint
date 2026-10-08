@@ -36,7 +36,7 @@ int main() {
     spec.exports = {"app/greet", "app/tally", "app/echo", "app/boom"};
     spec.optimize = {"size"};
     spec.meta = {{"capabilities", flint::Value::vector({flint::Value::string("fs")})}};
-    spec.resolve = [](const std::string &ns, std::string &out) {
+    spec.resolve = [](const std::string &ns, std::string &out, FlintDialect &) {
       if (ns != "app") return false;
       out = APP;
       return true;

@@ -1,0 +1,1 @@
+read error: unsupported escape \q (test/reader/err-bad-escape.cljc:1:5)

@@ -1,0 +1,1 @@
+read error: metadata must be a symbol, keyword, string or map (test/reader/err-meta-bad.cljc:1:3)

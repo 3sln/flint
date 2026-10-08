@@ -1271,16 +1271,16 @@ Decided by the maintainer 2026-10-08. Full record at `DECISIONS.md#four-units`.
       `flint.compiler.resolve`, `flint.compiler` -> `flint.compiler.core`)
 - [x] Compiler internals `^:internal` (all but `selfhost` and `wasm`, whose
       named entry points stay public), and a guest naming one refused
-- [ ] `src/flint/compiler/reader.cljc` deleted -- blocked on every door
-      answering forms, not text (migration step 5); see `DECISIONS.md#four-units`, "Open"
+- [x] `src/flint/compiler/reader.cljc` deleted; every door hands the compiler
+      read forms; `bin/check-reader` holds the kin reader to a frozen golden set
+      (`DECISIONS.md#one-reader-and-no-other`)
 - [x] `:refer-clojure :exclude`/`:only` honoured, `:refer :all` supported;
       each namespace's prelude is its implicit require edge; `clojure.core` no
       longer a root
 - [x] `defalias`, `.fln`-only; `flint.core.impl`; stdcore shrunk to six
       (`DECISIONS.md#defalias`)
-- [ ] The Rust SDK's `resolve` hook cannot report a `.fln` source (labels
-      every embedder-resolved namespace `.cljc`); needs the step-5 signature
-      change
+- [x] The Rust SDK's `resolve` hook and the C API's resolver say the
+      dialect (`Source`, `FlintDialect`); signatures broken, pre-release
 
 ### Standalone scripts (built, awaiting sign-off; fetching not wired)
 

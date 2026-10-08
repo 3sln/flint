@@ -5,7 +5,7 @@
 ;; takes FORMS back. Inside the sandbox an adapter over the host's port
 ;; implements it (`flint.compiler.selfhost/compile`, held by the native test
 ;; `cli/src/compile_call_test.rs`); here babashka implements it with `reify`,
-;; reading files off the disk with `flint.compiler.reader`, and calls
+;; reading files off the disk with the kin reader (`test/hostread.clj`), and calls
 ;; `flint.compiler.selfhost/compile-with` -- the SAME compiler source, interpreted by sci
 ;; instead of compiled by flint.
 ;;
@@ -33,8 +33,9 @@
 ;; files are flint's own dialect (`DECISIONS.md#dialects-and-preludes`) -- so
 ;; only `src`, the compiler's own sources, goes on the classpath.
 (cp/add-classpath (str root "/src"))
+(load-file (str root "/test/hostread.clj"))
 (require '[flint.compiler.resolve :as project]
-         '[flint.compiler.reader :as reader]
+         '[flint.compiler.forms :as forms]
          '[flint.compiler.selfhost :as selfhost])
 
 (def fails (atom 0))
@@ -63,29 +64,43 @@
 
 (def stdlib-dirs (vec (keys shipped-roots)))
 
-(defn read-answer
-  "Namespace `n` from the first of `dirs` that has it, READ -- the protocol
-  speaks forms. A shipped root answers with its owning workspace and grants,
-  as every door's resolver does; anything else is anonymous."
-  [dirs features n]
+(defn find-answer
+  "Namespace `n` from the first of `dirs` that has it, as `{:file :text ..}`
+  -- not yet read. A shipped root answers with its owning workspace and
+  grants, as every door's resolver does; anything else is anonymous."
+  [dirs n]
   (first
    (for [d dirs
          ext project/source-extensions
          :let [rel (str (project/ns->path n) ext)
                f (fs/file d rel)]
          :when (fs/exists? f)]
-     (let [info (get shipped-roots d)
-           s (cond-> {:file rel}
-               info (assoc :workspace (:workspace info) :grants (:grants info)))]
-       (assoc s :forms (reader/read-all (slurp f) (project/read-options s features)))))))
+     (let [info (get shipped-roots d)]
+       (cond-> {:file rel :text (slurp f) :dialect (project/dialect-of rel)}
+         info (assoc :workspace (:workspace info) :grants (:grants info)))))))
 
 (defn dir-resolver
-  "A `flint.compiler.resolve/Resolver` over directories, recording every wave asked."
+  "A `flint.compiler.resolve/Resolver` over directories, recording every wave
+  asked. Each wave is READ in one batch, by the kin reader
+  (`test/hostread.clj`) -- the protocol speaks forms, and the compiler reads no
+  text (`DECISIONS.md#one-reader-and-no-other`)."
   [dirs features asked]
   (reify project/Resolver
     (resolve-wave [_ names]
       (swap! asked conj names)
-      (mapv (fn [n] (read-answer dirs features n)) names))))
+      (let [found (mapv (fn [n] (find-answer dirs n)) names)
+            read (hostread/read-texts (mapv (fn [a] (assoc a :features features)) (remove nil? found)))
+            read (volatile! read)]
+        (mapv (fn [a]
+                (when a
+                  (let [r (first @read)]
+                    (vswap! read rest)
+                    (let [s (dissoc a :text)]
+                      (if-let [e (:read-error r)]
+                        {:error (assoc e :file (:file a))}
+                        (assoc s :forms (forms/resolve-conditionals (forms/decode (:preread r))
+                                                                    features (:file a))))))))
+              found)))))
 
 (def slots (into {} (map (fn [[k v]] [k v])) (json/parse-string (slurp (str root "/dist/slots.json")))))
 
@@ -99,7 +114,7 @@
 
 (let [work (str (fs/create-temp-dir))
       prog "nbody"
-      features reader/default-features
+      features forms/default-features
       asked (atom [])
       t0 (System/currentTimeMillis)
       r (selfhost/compile-with {:entry (symbol prog "main") :target :llvm :slots slots}
@@ -124,7 +139,7 @@
       app "(ns app\n  (:require [clojure.string :as s]\n            [nope.gone :as g]))\n(defn main [_] (g/f))\n"
       _ (spit (str work "/app.cljc") app)
       run (fn [] (selfhost/compile-with {:entry 'app/main :target :image :builtins (set (keys slots))}
-                                        (dir-resolver (conj stdlib-dirs work) reader/default-features (atom []))))
+                                        (dir-resolver (conj stdlib-dirs work) forms/default-features (atom []))))
       r (run)
       e (first (:errors r))]
   (check-that "a namespace nobody answers is :missing, positioned at its require (app.cljc:3:13)"
@@ -164,7 +179,7 @@
       asked (atom [])
       compile1 (fn [entry]
                  (selfhost/compile-with {:entry entry :target :image :builtins (set (keys slots))}
-                                        (dir-resolver (conj stdlib-dirs work) reader/default-features asked)))
+                                        (dir-resolver (conj stdlib-dirs work) forms/default-features asked)))
       ok (compile1 'ab-cd/main)
       bug (compile1 'ab_cd/main)
       lit (compile1 'under_score/main)

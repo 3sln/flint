@@ -1,0 +1,328 @@
+FLF1˚deps/flint/deps.cljcÒ`deps.edn`, the parts of it flint can honour (`DECISIONS.md#cli`).
+
+  ## What is supported, and what is not
+
+  `:paths`, `:flint/tasks`, `:flint/overrides` and `:deps` of every kind flint
+  knows: git, npm, maven, `:local/root` and pods. All of them resolve
+  TRANSITIVELY, through one walk (`DECISIONS.md#one-dependency-walk`) -- this
+  file plans, the host fetches, and `flint.deps.manifest` is what knows which
+  file a given ecosystem keeps its dependency list in.
+
+  The caution that matters more than the cost still holds, and it is why this
+  reports what it cannot do BY NAME rather than half-fetching: resolving a
+  coordinate gets you SOURCE, not something that compiles, and most of Clojars
+  reaches for host interop flint does not have. That is the manifest style the
+  README already uses for library coverage -- a dependency source states what
+  it does not support.IKeys meaningful on a coordinate of ANY kind, so no kind has to list them.¿EVERY coordinate kind flint knows, the key sets that define one, and every
+  other key it understands.
+
+  ONE LIST, deliberately. This used to be two -- `dep-kind` here and
+  `coord-kind` in `flint.deps.resolve` -- written separately and drifted: maven
+  had a different kind keyword in each, and a git coordinate written as
+  `:git/tag` with no `:git/url` was git to one and unknown to the other.
+  Neither disagreement was reachable through a supported path, which is exactly
+  why they survived: two tables that agree on the common cases look like one
+  table until something uncommon arrives.
+
+  `:forms` is a list of ALTERNATIVE KEY SETS, and a coordinate is of this kind
+  when it carries every key in ANY ONE of them. This is one idea rather than
+  two: "what marks this kind" and "what does it require" are the same
+  question asked of a complete coordinate, and splitting them into a one-of and
+  an all-of made `{:pod/path}` and `{:git/url :git/sha}` look like different
+  species of rule when they are the same rule.
+
+  An ARRAY, walked in order, first satisfied set winning -- so order is
+  PRECEDENCE, and a coordinate carrying keys from two ecosystems resolves the
+  same way everywhere rather than depending on which reader saw it. Within a
+  kind the MORE SPECIFIC set comes first, so the form that gets reported is the
+  one the author most nearly wrote.
+
+  `:also` is every other key the kind understands: optional settings, and
+  spellings read as fallbacks. It is what makes a TYPO REPORTABLE -- without it
+  `{:npm/verison "1.0"}` is not an npm coordinate with a misspelling, it is a
+  coordinate of no kind at all, and the message says so and helps nobody.
+
+  `:manifests` is the formats a dependency of this kind may CARRY, in
+  precedence order (`flint.deps.manifest`), and `:source` is where its code
+  sits when it carries no manifest saying otherwise. Both live here rather than
+  in the walk for the reason the kinds themselves do: adding a kind should have
+  to answer "what does one of these say it depends on, and where is its
+  source" in the same edit, not silently default to whatever the last `cond`
+  clause happened to be.
+
+  The functions that act on a kind stay separate -- resolving, fetching and
+  pinning are genuinely different jobs. What must not be separate is the answer
+  to `what kinds are there, and what may they say`.1The first entry with a satisfied key set, or nil.5Every key one kind understands, across all its forms.ﬂThe kind a coordinate was REACHING FOR when no set was satisfied.
+
+  Without this an incomplete coordinate is simply of no kind, and the only
+  honest message is "flint cannot resolve this" -- which is true and useless
+  next to "git needs :git/url, and this has only :git/tag". The candidate is
+  the kind sharing the most keys with what was written.¥What is wrong with one coordinate, as data.
+
+  `{:kind k :missing [..] :unknown [..]}`. `:missing` is the absent keys of the
+  NEAREST key set -- the one the author most nearly wrote -- and `:unknown` is
+  keys the kind does not understand, which is how a typo gets named instead of
+  silently doing nothing.ÕOne sentence about why a coordinate CANNOT BE USED, or nil if it can.
+
+  Fatal only. A coordinate that satisfies a key set is usable, even carrying a
+  key this kind does not know -- `deps.edn` is a format flint shares with
+  tools.deps, real files carry keys flint has no opinion about (`:exclusions`),
+  and refusing a build over one would be flint asserting ownership of a format
+  it borrows. Those are `coord-notes`, which is reporting rather than refusing.
+
+  ONE WORDING, used by every funnel that refuses a coordinate. `incomplete` and
+  `flint.deps.resolve/plan` both do it and both have to say why; two spellings
+  of the same complaint is the same drift this file's one table exists to end,
+  one level up.,  is not a key  are not keys  understands;  coordinates need  and àWorth saying about a USABLE coordinate, or nil.
+
+  A key its kind does not understand: harmless to this build, and almost always
+  either a typo that silently did nothing or a setting meant for another tool.
+  Reported rather than refused -- see `coord-complaint`. understands, and is ignored˛Coordinate kinds this build can fetch.
+
+  `git`, `npm`, `maven`, `local` and `pod`. 0021's order is git, npm, maven --
+  the cost order, and also the order of how likely the fetched code is to
+  compile.
+
+  EVERY ONE OF THEM RESOLVES TRANSITIVELY, through one walk
+  (`DECISIONS.md#one-dependency-walk`). Maven used to be the exception and is
+  not any more: a jar carries its own POM, so the graph is read off what was
+  already fetched. `flint.deps/maven-note` states what the POM reader still
+  does not do.ëWhere a jar is looked for, in order. Clojars first because that is where
+  Clojure libraries live; Central because `org.clojure` itself does not.https://repo.clojars.orghttps://repo1.maven.org/maven2äWhat flint's maven support does and does not do, stated where a reader will
+  meet it.
+
+  The transitive half is BUILT now: a jar carries its own POM at
+  `META-INF/maven/<group>/<artifact>/pom.xml`, so the graph is read off the
+  thing that was already downloaded rather than from a second request. What is
+  still not done is the parts of Maven that are Maven rather than dependency
+  resolution -- parent POMs, profiles, version ranges -- and a version those
+  leave unresolved is refused by name instead of guessed at.Jflint fetches a maven jar at an exact version and takes the source in it,
+Kand reads the jar's own POM for what IT depends on. What it does NOT read:
+Ma parent POM, a profile, or a version range -- so a dependency whose version
+Nonly a parent knows is reported rather than guessed. The caution that matters
+Lmore than the cost still holds: resolving a coordinate gets you SOURCE, not
+7something that compiles, and flint has no host interop.6The jar URL for an exact `group/artifact` and version./.-.jarhttps://registry.npmjs.org◊Whether `v` is one version rather than a RANGE.
+
+  npm's tarball path is derived from an exact version, so `^1.2.0` would build a
+  URL for a package that does not exist. Refusing is also the same stance flint
+  takes on a git branch: a range resolves to something different next week, and
+  a build that changes underneath you is not a build.^~><*| =Xx0123456789®The tarball URL for an EXACT name and version.
+
+  Exact, which is why no registry metadata is needed: npm's tarball path is
+  derived from the coordinate. A range would need metadata AND would resolve to
+  a different package next week, which is the same objection flint raises to a
+  git branch.@/-/.tgzàWhich sort of coordinate this is, by the key set it satisfies.
+
+  Reads `coord-types` rather than repeating it. A key present but nil does NOT
+  count -- the old `cond` tested the VALUE, and a coordinate written
+  `{:git/url nil}` has said nothing about being git.ºRead `deps.edn` through `slurp*`, a function from a project-relative path to
+  its text or nil. An absent `deps.edn` is an empty project.
+
+  A function rather than an fs handle: what this namespace needs is *can I read
+  a project file*, not the shape of the `:fs` capability. That seam is what lets
+  the same code run under the bootstrap host and inside a compiled module,
+  which is the whole reason the logic is here and not in `bin/flint`.deps.edn5Source roots, defaulting to `src` as `deps.edn` does.srcr`:flint/tasks`, in babashka's shape: a map of name to `{:doc :task}` or to a
+  bare form. A bare form is the task.±A cache directory name for a git coordinate. Derived from the URL and the
+  sha, so two coordinates that differ in either do not share a checkout, and the
+  same one twice does.[A-Za-z0-9._-] \.git$~The file a host writes into a checkout once the fetch has SUCCEEDED. Its
+  presence is what `fetch-plan` reads as `:fetched?`..flint-fetchedäWhy flint cannot fetch this coordinate as written, or nil.
+
+  ONE WORDING, for the same reason `coord-complaint` is one wording: this is
+  asked both of a project's own `:deps` (by `incomplete`, at the top of a
+  build) and of a coordinate the transitive walk reached (by `fetch-plan`,
+  which has nowhere else to say it). Two spellings of `is a range` is the drift
+  the coordinate table exists to end, one level up.
+
+  A git dep without a sha is the one that matters: `deps.edn` allows it, and
+  resolving it means asking the remote what a branch points at today, which is
+  a different build tomorrow. flint refuses rather than doing that quietly.Mno :git/sha -- flint will not resolve a branch to whatever it points at today:mvn/version > is not one exact version -- flint takes an exact version, and `flint deps pin` writes oneno :npm/version:npm/version 9 is a range -- flint takes an exact version, for the same, reason it takes a git sha and not a branch.A `flint deps pin` resolves it and writes it into :flint/overridesno :local/root:pod/version A is not one exact version -- a pod is pinned like everything elseÜThe directory an npm tarball is unpacked INTO. The tarball itself contains a
+  `package/`, so this is one level above the source root./npm/EWhere a pod fetched from a registry lives. `:pod/path` names its own./pod/ZWhere a coordinate's content lives once fetched, or nil if flint cannot
+  fetch it at all./git//package/mvn/:kThe manifest formats a kind may carry, in precedence order. Reads
+  `coord-types` rather than restating it.<Where a dependency's code is when its manifest does not say./src∫Kinds that are ALREADY THERE by construction. `:local/root` and `:pod/path`
+  name a directory rather than something to go and get, and treating them as
+  unfetched is the bug this names: the walk probed for a `.flint-fetched`
+  stamp, which nothing ever writes into somebody's own source tree, so every
+  `:local/root` came back pending for ever and `bin/flint` reported it as `no
+  such :local/root` -- for a directory that was right there.ªA transitive coordinate's relative path, made relative to the manifest that
+  DECLARED it rather than to the project at the top of the walk.
+
+  `:local/root "../lib2"` written in `lib/deps.edn` means `lib/../lib2`. It
+  was being resolved against the top project instead, so the correct spelling
+  failed and the wrong one -- a path written as if the file sat at the root --
+  worked. That is the shape of bug that trains people to write the wrong thing.
+
+  Absolute paths are left alone, and so is every other kind: only a path
+  coordinate has a base to be wrong about.üWhat a scanned manifest contributes to the walk.
+
+  A POD MAY ONLY DEPEND ON PODS. Whatever a pod links natively is its own
+  affair and invisible from here; a pod depending on ANOTHER pod is meaningful,
+  and resolving it is the one piece that cannot be delegated to a driver pod,
+  because the pod manager is the fixed point everything else is fetched by. A
+  coordinate of any other kind in a pod's manifest is DROPPED rather than
+  walked -- a subprocess must not be able to pull a compiler's worth of source
+  onto the path behind itself.ƒWhat has to be fetched before this project can build, as data -- transitively,
+  for EVERY kind (`DECISIONS.md#one-dependency-walk`).
+
+  Resolution here, fetching in the host: the guest decides WHAT to fetch and
+  where it goes, which is pure and testable, and the host runs `git`. That is
+  the same split the rest of the CLI draws, and it is why `deps.edn` support can
+  be tested without a network.
+
+  Transitive, and therefore iterative. A dependency's OWN manifest is what says
+  where its source is and what it depends on in turn -- the coordinate does
+  not, which is the part it is easy to get wrong -- and that file does not
+  exist until the thing is fetched. So an entry that is not on disk yet comes
+  back with `:fetched? false` and no `:paths`, the host fetches it, and the
+  host asks again. It settles when nothing is left unfetched.
+
+  WHICH manifest is `flint.deps.manifest`'s business and not this one's. That
+  is the change that made one walk possible: this used to read `deps.edn` and
+  only `deps.edn`, so npm's transitives were resolved by a second walk in
+  `flint.deps.resolve` and maven's were not resolved at all.
+
+  Each entry carries `:via`, which is the DOWNLOADER it needs -- `:git`,
+  `:tgz`, `:zip`, `:file`, or `:none` for something already on disk. A host
+  dispatches on that and not on `:kind`: how a thing is fetched and what
+  ecosystem it belongs to are different questions, and a host that switched on
+  the kind is the third copy of this table that broke last time the kinds
+  moved.
+
+  `slurp*` is the project reader; `cache` is the root the host keeps checkouts
+  under. `opts` may carry `:exists?`, a directory probe, and `:os/name` and
+  `:os/arch`, which pod artifact selection needs.$flint cannot resolve this coordinate¥`{dep-name #{capability ..}}` for every dependency whose own guard has been
+  read -- the third argument `lending-errors` needs and never got.
+
+  Keyed by the SAME name `deps.edn` uses for the entry, because rule 2 looks the
+  guard up by the entry's key. A dependency whose manifest has not been read yet
+  is absent rather than empty: "no guard" and "not read yet" are different
+  facts, and only the first one lets the build through.IEvery fetched dependency's source roots, in the order they were resolved.˚A grant in either form as a set of capability NAMES.
+
+  `system-namespaces-and-deps` lets a grant be a map of name to policy as well as a set of names,
+  because a name says what KIND of authority and the policy says which routes.
+  Only the names matter here: the policy is the host's, checked when a call
+  happens, and this is the compile-time half (`workspace-capabilities`).±Every rule a `deps.edn`'s capability delegation breaks.
+
+  Two of the three rules `system-namespaces-and-deps` states; the third is `flint deps add` writing
+  the grant it found, which is the tool's job and not this one's.
+
+  1. **You cannot lend what you do not hold.** A grant on a dependency entry
+     that the project itself was never granted is refused, naming both. Without
+     this, `deps.edn` would be a way to MINT authority: a project could hand a
+     dependency `:fs` it never had, and the whole chain stops being auditable
+     from the top.
+
+  2. **A dependency declaring a guard must be granted it.** This is `workspace-capabilities` level
+     one moved to where the coordinate is. The guard already refuses the
+     `:require`; refusing here as well says so at the place a person can fix it,
+     with the dependency's name in front of them rather than a namespace three
+     levels down.
+
+  `guards` is `{"dep-name" #{capability ..}}` -- what each dependency's own
+  project file demands -- because that is read from the fetched dependency and
+  is not in this file's input. KEYED BY STRING, because that is what the plan
+  records and `plan-guards` builds; the entry's symbol key is looked up as
+  `(str nm)`. The type was left unsaid here once, and the lookup missed
+  silently for every dependency.
+
+  Returns `[{:dep :missing :reason}]`, empty when all is well. REPORTED rather
+  than thrown for the same reason `plan` reports: whether it is fatal is the
+  front end's call, and a tool listing a graph wants to see every problem at
+  once rather than the first.this project lends  to  and was never granted it; it holds  -- it holds nothing
+ requires , and this deps.edn does not grant it -- add :flint/capabilities-grant  to its entryECoordinates flint would fetch but cannot as written, with the reason.«Every entry the WALK had to drop, with the reason.
+
+  Separate from `incomplete` because it answers about the whole graph and not
+  about what a person typed: a transitive npm range arrives from somebody
+  else's `package.json` and is not in this project's `deps.edn` at all, so
+  nothing that reads only `:deps` can report it.óEvery dependency this build cannot fetch, with the reason, so a project that
+  will not work says so at the start rather than at the first missing var.7A one-line summary of what was found, for `flint deps`.
+paths: tasks: 8dependencies that are supported but unusable as written:    -- %dependencies this build cannot fetch:  ()=  flint fetches git, npm, maven, :local/root and pods. 0021's?  order is git, npm, maven -- cost order, and also the order of?  how likely the code is to compile: flint has no host interop,@  so a library has to be portable cljc, which most of a registry	  is not.optsfilefeaturesanytagsdialectportablecondsns
+flint.depsrequireclojure.ednasednclojure.stringstrflint.deps.manifestmanifestflint.deps.registryregistrydefuniversal-coord-keysdepsrootcoord-typeskindgitformsurlshatagversionalso	manifestsdeps-ednpackage-jsonpomsourcelocalnpmname	integritymvnrepospodpathnonedefn-has-all?coordformevery?fnkgetdefn
+coord-typesometwhen	kind-keysintosetmapcatidentitycoord-candidateletscoredkeepksnsnamencountfilteror	contains?	namespacekeyspos?secondlastsort-byfirstcoord-problemsmatchedif-notunknownmissingknownnearestwhen-notremovematched?some?veccoord-complaintcondseqjoinmapifelsecoord-notesandsupported-dep-kindsdefault-maven-repos
+maven-note	maven-jarrepodepiindex-ofgroupsubsartifactincreplacedefault-npm-registryexact-version?vnotblank?c	includes?dstarts-with?npm-tarballnmbasesplitflintregexdep-kind	read-depsslurp*nil?read-stringpathsptasksreducemekeyvalassockeyword?map?taskgit-namecleanmapvre-findminstampcoord-reasonpr-strnpm-basecachepod-dir	coord-dirwhen-letb
+kind-entrymanifests-ofdefault-sourcecasenever-fetched?rebase-relativekidsfixr->kids-ofdsaccconj
+fetch-plannpm-registrymaven-repos	overridesexists?osarchdirectlooptodoseenoutempty?k0symbolresolve-poddirrecurrestneed-registryurddoc-dirviadoc-filefetched?whydirect?aon-disk?booleanscanentrytgzzipunpacksha256exec
+executableguardconcatplan-guardsplanfor	dep-pathsnames-ofgvector?set?seq?lending-errorsprojectguardsheldcapabilities-grantlentoverrulereasonneedsshortsort
+incompleteif-letrefusedunsupporteddescribebadsplit-lines†ÖÜáàâäãå ç éè êë í ì î ï ñ ó ò ô öõú ùûü†ü°ü¢ü£ü§•¢¶ß®©™@´´ú¨¨≠¨§¨Æ¨òúØØ§Ø∞±±≤±§±ò≥ ¥ µ ∂ ∑ ∏ π ∫ ª º Ω æ ø ¿ ¡ ¬ √ ƒ ≈ ∆ « » …   À ≠ Ã Õ Œ œ – + — “ ” ‘ ’ ÷ ◊ ÿ Ÿ ⁄€‹ › ﬁ ﬂ ‡· ‚ „ ‰“ û · ‹ € Â ÊîÁ Ë ÈÍ Î Ï Ì Ó Ô  Ò Ú § ÛîÙ ı ˆ ˜ ¯î˘ ˙ ˚ ¸ ˝î˛ ˇîÄ ÅîÇ É Ñ ÖîÜáà â ä ã åíç é èé êáê ë í ì î ï ñ ó òô ö ° ¢ õ - ú ù û ü † ° ¢ £ § • ¶ ß ® © ™ ú ´ ¨ ≠ Æ Ø ∞ ± ≤ ≥õ ¥ µ ∂ Öá∑ ∞á∏ πáπ ∫∫ ªª≠ ºªº Ω æ ø ¿ ¡ ¬ √ ƒ ±ò≈ ∆ « »…   ÀòÃ∆ÚòÕ°òŒœ–— “˜ ” œ ‘ñ’ ÷◊ÿòÕ˜°Ÿ⁄˜⁄€˜‹› ﬁ ﬂ ‡ ·¿ ‚ „ ‰ Â Ê Á Ë È õ Í ÎáÏ« Ì ÓÔ Ò Ú Û Ù ı – ˆ ˜ ¯ ˘î˙
+ 
+  	 *   	"
+ 	   	  ! 	  & "	  & "      R	  
+	 	  	  	  	 	  !
+	"#$   )%& 
+'	 	(  	 !	" %& 
+)	 	*+  	+ 	,-  !	"#  %. 
+/	 	0 	1 !	"$  %. 
+2	 	3 	4 	5 !	2 %6
+ 7 8 	 9 :  ; & '< *	 += . /> 39 9= =: ? @	 9 A 	 
+< 	 B  C  A  < !	 ": ( )8 29 8: ? GB @ KB	 7 D	 B E 	 
+F  B   G !H * 2B + ? I	 9 J 	 	K  L  < 	 B J 	 M ! "D ,BN % &O + 2B ,P   !Q ' (R / 0< 3	 4=1 2S 5 6T @M C=5 6U 8N ? @V J=/ 0W 59 C   !X &P )	 *P ,B Y  Z  [ \ "K ? ]	 9 J 	 	^  @ 9	B  S ^  I (9 _ B 
+`a   	 ` , 	  J 	 b  E  . /D 9Bc  d ^ \  [ ' (< +	 ,:) *Q 0 1e 8 9< <	 == @ A> E9 K= O:' /B (	 
+  B f g ^a h  e   !< $	 %= ( )> -9 3= 7c` h  e   !< $	 %= ( )T 3b 9= = >W C9 ? i	 9 J 	 	 
+j 	 k l m 'n 1 2] A9 ol  U` k 
+  p n   q	  r   $n  s  U  Q n 
+ & 7 O k C  p m   O k q % &r * .m   $ p m   O k - .q ? @r D Hm 7 t ** ? u	 9 J 	 	 
+j 	 k l n ) *] 99 C  v l  p n   q	  r   $n  s  U  Q n 
+ & 7 O k  w F  	r    x	    y  
+ ? z	 { 	| } J 	 	~     | #	Ä  s ~  Å    |  '~ % * + /|	Ç  s ~  Å   #| ( )É -~ 1 2 6|  
+{  Ñ  Ä & * 3Ç @}Ç  }!  / <
+#  Ö"  ? Ü#	 á J 	 	á   á v 
+ à  â á
+ à  A  < 	 ä  ã ,á .ä	
+$%&'()*+,-    " & * . 2 6 :
+ A  < 	 å  ç *á ,å	
+./01234567     ! % ) - 1 5 ? é8	  è } J 	 	ê  s  ç $è9 ' , -Z 2 3ë =è @ 
+í Gè	  
+ è:  ê  )};   % 1 ? ì<	 9 
+ @ 9`   ? î=	 ï J 	 	B  ï>  s 	 
+ñ B  
+   ó &B ? ò?	 å J 	 	ô ö å  s 	 
+p ô  h ô 	@  ? õA	 å J 	 	B ú å  ù  < 	 û ü J 	 =  † ü á ! "° &ü ¢ û     s # $£ -= 0 1O 6= 9= s  § "á %á ' 
+• .á 
+   S B  
+  7 ¶B	 ß ® J 	 	©  < 	 ™  q ! "´ ' (< +	 ,ä / 0s 3 4¨ < 
+íC Nä Qä  S' (ë 2 3 7™ : 
+íD	ê  Z  ë   Ñ , - 1ß 6 
+íED @ D 
+í  
+ © ê   Å ! "© (®  / 0≠ 7 8Q > ? C® 4 -   ÆFG
+ ? ØH	 ä J 	 	=  ì ä o i ä  i ,ä v  U =   â # $ ( )S , 6ä - 9  ?ä :I v  U =/   à  Ü ,0 :ä - J  ∞ $0 2ä %KL  v  U =)   â # $ ( )S ,+ :ä - =0 Kä >M v  U =)   à  Ü , -S 0+ >ä 1 A0 Oä B N  ∞ $ %S (+ 6ä ) 90 Gä :OPQ  v  U ='   â % & *( 7ä +R v  U =2   â # $ (3 3ä ) à  Ü !4 /ä " S  ∞ $4 2ä %T t  .. 7 ±U	 è ä 	≤ J 	 	á  S + ä   0 .ä ! C  Ü á  ≤V Ñ  Ñ & ' +è9D / 3  7 ;  Dá @ ? ≥W	 ≤ 
+è }  ≤X  Ñ # $Ñ 0 1 5è9D 9 =  A E  N}  J 7 ¥Y	 è ä 	≤ J 	 	=  ì ä o U 
+=   J 	 ®  S   *ä ! -  3ä . d  â * + /®  ≤Z ) *¶ 3 =ä 4 @® ! U 
+=)   µ 	 ∂   ± )è ,ä .≤ 6 7 ;∂[ = U 
+=/   J 	 á 0 (ä  C  Ü ,á  ≤\ Ñ * +Ñ 7 8 <è  @ D]  I M  Vá #R U 
+='   d  â * + /( <ä 0 A( Nä B
+ U 
+=2   s  â " # '3 2ä ( C  Ü *4 8ä + ≥ ≤ %è (4 6ä )  3 $ä t ** 7 ∑ 	 =  A  < !	 "B % &C + ,U .= 0 7B 1 ;B ? ? ∏^	 = h !  ∑  = 	 7 π_	 = ∫ ª 	%  ∑ = 
+.	 ∫&
+	   ∫`  	  7 ºa	 = ä S  U 
+='   v  U =2  $ %à ) *â 5 6 :3 Eä ; 7 Ωb	 æ 	ê s  â   êæ ´  < 	 ü J 	 ä  Y üø  < 	 ä = J 	 ¿ ! " & '> +ä -= s   S # $â /¿ 2 3ç D¿ Fä ¢ $ä &= ( ) -ê 6¿ 2	  \ ü  ¡ ä   !ø( % 2 3ø3 7æ 7 ¬c	 = û J 	 	√  S ƒ û   
+  _  U =2 √ ù  < 	 ≈ ü  s   U2 ' (ì 1 2° 6ü " ; <∆ A≈ Eü H≈ N 	  Q√ ? «d> 	 å ≤ ï  « !å #≤ )ï 0 
+  	 å ≤ ï » J 		 
+  S … ,å  /Ö
+   s  p À -å  1À Eå 2 Hx
+Ã  S Õ *å  - 
+ 
+Œ œ » 
+–  > »—D    $“ ) *> .»”D 3 <
+‘  F  ´  <  	 !ü $ % ) *† .ü 3 4S 7ƒ >å 8 A 
+  ’ 	 ÷  h  S ƒ "å  % 
+  *◊ /   3ÿ 7 	  	s  Ÿ ÷
+ÿ
+ J 	 ü  \ ÷⁄  \ üè   ⁄ä  S  > Ã %⁄ ) *> .Ã 8 9€ @è E FY Mük  ì ä‹  C  v   U "k2 ' - .â 9 : >3 Iä ?  Ü /4 =ä 0  ñ % &ï - . 2 3≥ ;≤ Aè D4 Rä E6Æ2 › ,ï 3≤ 9å ;è >4 Lä ? O– R“ﬁ  ¥   S #* .ä $ 1è 5ä 7≤∫  s  â % & * 6ä + ;ﬁ ? @ Dﬁ L Xä M H	 o T ◊ è " #ﬂ ) *h . /‡ 4÷ ;◊ @ÿ· ‹  J 	 ‚ · &‹ „  ‰ )≤ /‚ ﬂ  h  ‡ "÷ )◊ s  A ! "< %	 &™ ) *U ,Â 2™ - 5„ :ÿÿ ∆ ÿ # 
+	Ê )‚ÁËÂ)„. 2„È :‚*ÍÎö; 	  S  ñ ﬁ Ï #‹  ﬂ  h  ‡  ÷ ' (∆ -◊ 2è s  S  U` )k   v " #T -‘ 4è 8 9g ? @Ø Mäÿ ∆ ÿ ! 
+Ê 'è 0kË6Ì+ ,T 6‘ =èÏ' (S +Ï 1‹ , 6 7Ø Däe+Îö8 	 t J 	
+ Ó Ô !‹   º -k 2äÒ  s !
+  s #Œ + ,Ú 4 5Œ =ﬁ C  g & 'ï . / 3ﬁ ;Æ 7û  C Ò % &Û 4ï ;∫ @è C D∏ QkÙ  
+Ê  è )kË  !o"6" #U %k *" #U %k) *ı" #U %k/ *ˆ" #U %k2 * 0 1˜ >¯ MÓ ?t+000"(Â ﬁ. *∫˘
+# $s ' (U *k) /% &± / 0S 3* >ä 4 Aè Eä G≤%ﬁÈ 	 !o" #U %k) *" #é / 0S 3- Bä 4 E/ 0S 3* >ä 4 Aè/ 0S 3+ Aä 4 D0 Rä E" #U %k/ *" #´ ( )< ,	 -¿ 0 1z ;¿ =è @0 Nä A( )S ,1 8ä - ; " #U %k2 * 0¯ ?Ó 1t( 2ä )"   !S $ .ä % 1  7ä 2˙#˚ 5Ó $¸
+!˝ 7Ó "Î% &Ú .Ò˛"˛ *û #ö" #C (Ò$ %s ( )p -ö 5û .& '´ , -< 0	 1ô 4 5 9∫ Bô > Fö Nû G& 'π 6k ;∫ ﬂ  h  ˇ $ %‡ *÷ 0 1Ω A B¬ Jk Oû R∫ ∆ ◊ "è ∆ ÿ !ÙV ? Äf	 Å E 	 
+   Ç 	 ü ÅÉ   p $˛ ,ü %  1	 2Ê 8ü 3 ;˛ Cü < ? Ñg	 Å h  	Gö  RÎ )Å   7 Öh	 Ü	 o § Ü  F  W Ü S 	 
+á Ü  à Ü  â $Ü ( )F -Ü ñ Ü   t  Ü ? äi: 	 ã å  ä #ã +å 0 
+  	 ã å ç J 		 
+é  Ö è 4ã  h  ˇ Ç 	 	 è 9 åê	 ë  Ö 'è B9 (í  E #   ' (e /é 4ëÉ p í 
+Ê èa  íìî j 2 3∞ :ík Gèl s   !p %é m 1 2∞ 9é #n  @ Ç 	 	 è 9 åê	 ï  Ö ( )> -ç 4 5 9èë  Ö 'è B9 (ñ  E $   ( )e 0ë 5ïÉ p ñ 
+Ê èa  ñìî  èo , -∞ 4ñpq9 :∞ A Bh F Gó Lñr  ? òs	 å ù  < 	 ≈ ü ô 	 ö  Ø ( )° -ü ∆ ≈  
+Ê    $ %† )üÏ 2ö≈ 	   S ƒ å   
+  ? õt	 Å h  	RÏ Å  ? úu	 å ù  < 	 ≈ ü J 	 =  ì   ° $ü s  T w 2=≈ ∆ ≈  
+Ê ! " & '† +ü 5= 	   S ƒ å   
+  ? ùv	 å J 	 	‚  ú å	û  ò å qw ˇ 	  x ' (q	 6 7ò =å 1  y ' (q	 6 7ó < =W B Cõ Iå 1  s  Ÿ #û 	  ˇ !	z "! "´ ' (< +	 ,™ / 0{ 9Ê ?™ :| JÏ P™ K 4 B Uû s  A ! "< %	 &ü ) *U/ 1 2ì ; <° @ü , F GS Jƒ Qå K T 
+  ˇ !	D " & 'ü 7y 	  s  Ÿ #‚ 	  ˇ !	} "! "´ ' (< +	 ,™ / 0{ 9Ê ?™ :~ H IO N U™ O 4 B Y _‚!	ÄÅÇÉÑ """"" 
