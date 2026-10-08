@@ -11,8 +11,10 @@
   inside somebody else's immediate. That direction is SAFE: a spurious edge
   keeps a function that could have gone, and a real call is always found,
   because a real call really is that byte followed by that LEB. So this can
-  only ever remove too little, never too much -- and `bin/shake-report`
-  measures how much too little, against the linker's own answer.
+  only ever remove too little, never too much -- and `test/shake.clj`
+  measures how much too little, against the linker's own answer: 43% of what
+  `rust-lld` removes on its program at `865b76e4`, asserted only `> 0.35`.
+  (This said `bin/shake-report`, which does not exist in the tree.)
 
   **Dead functions are STUBBED, not deleted.** A wasm function index is
   positional: deleting one renumbers every call, every table element and every

@@ -46,6 +46,7 @@ this block.
 - [exclude-and-unit-path](#exclude-and-unit-path) -- `:exclude` as an assertion, and `:wasm-path`
 - [module-metadata-and-shards](#module-metadata-and-shards) -- What a module says about itself, and shards
 - [no-runtime-linking](#no-runtime-linking) -- No linking at compile time; byte strings and transient ropes
+- [composing-runtime-units](#composing-runtime-units) -- Prebuilt units composed without a linker, priced against relinking
 - [strings-and-matching](#strings-and-matching) -- Rope strings, and what to do about regex
 - [matching-over-ropes](#matching-over-ropes) -- The matcher must consume a rope, which decides the whole design → a Pike VM
 - [tables](#tables) -- Columnar storage that is a value
@@ -1996,7 +1997,8 @@ export after it — an `unreachable` body keeps every index valid while still
 dropping the code section bytes, which are 89% of the module and nearly all
 of the actual prize. Measured on a program using `clojure.string`, `reduce`
 and `filterv`: shaking recovered 57% of what `wasm-ld` removes with no
-linker at all, 79% on a trivial program.
+linker at all, 79% on a trivial program. (Those were the figures then; it is 43% on `test/shake.clj`'s
+program at `865b76e4` -- `composing-runtime-units`.)
 
 **A shaking-under-load bug found a real bug in `clojure.core`, not in the
 shaker.** At scale, shaking traps inside the self-hosted compiler; a named
@@ -2006,6 +2008,319 @@ because `for` compiled to `mapcat`, whose variadic `concat` recursed one
 600 items became 600 nested frames. `mapcat` and `concat`'s variadic case
 were rewritten to be properly lazy/iterative, a defect that had nothing to
 do with wasm and had been costing every `for` over a large collection.
+
+---
+
+## composing-runtime-units
+
+**Prebuilt units composed without a linker, priced against relinking**
+
+**Ratified:** ☐ not signed off
+
+**Status: a SPIKE, recorded 2026-10-08 on branch `units-spike` off `865b76e4`.
+Nothing here changes what ships.** The proof of concept is
+`bench/units-spike/run`, committed so that every figure below comes from
+running it and not from this paragraph. It ran green on that tree: units from
+`bin/build-dist` (production, nightly-2026-10-01, LLD 23.1.1), the CLI from
+`cargo build --release -p flint-cli`, node v24.6.0, macOS aarch64. **The
+machine was heavily loaded** (load averages 44 to 163 across the session, from
+work outside this tree), so the sizes are exact and the timings are only
+coarse.
+
+### The question
+
+The shipped doors carry no linker (`no-runtime-linking`): they splice each
+program into one prebuilt, always-everything `dist/flint-runtime.wasm` (839 653
+bytes) and `flint.wasmshake` stubs what it can prove dead. `bin/flint` links
+per program with `rust-lld --gc-sections` instead (`namespace-units`). The
+proposal under test (**option 2**) is per-unit prebuilt pieces composed with
+NO linker, the same model on wasm and native, replacing the shaker. The
+alternative to price (**option 3**) is a small linker inside the artefact.
+
+### What was built, and what ran
+
+Each unit is linked ONCE, at build time, into its own wasm module, and
+**pre-placed**: it imports one shared memory and one shared funcref table, and
+owns a fixed, disjoint memory range and table range chosen by the build
+(`bench/units-spike/build-units.mjs`):
+
+| unit | memory | table | module bytes |
+|---|---|---|---|
+| `flint.rt` | 0 – 1 091 776 (1 MiB stack first, then data) | 300 – 2 347 | 636 621 |
+| `flint.conc` | 1 114 112 – 1 184 256 (data, then its own 64 KiB stack) | 2 348 – 2 859 | 44 454 |
+| `flint.data.json` | 1 245 184 – 1 322 208 | 2 860 – 3 371 | 68 083 |
+| image | from 1 376 256, heap after it | | |
+
+Builtins keep the slots `dist/slots.json` already assigns (43 – 267), so the
+image the SHIPPED door compiled runs unchanged. The map is fixed whichever
+units a program uses: a unit's addresses never depend on which others are
+present.
+
+`bench/units-spike/compose.mjs` instantiates `rt`, then each unit with rt's
+exports as its `env` imports, binds the 222–223 builtins into the table,
+writes the image and its descriptor, and hands the merged exports to
+`sdks/esm/src/guest.js` unchanged. **Six programs ran end to end and printed
+exactly what the shipped module prints through `host/flint.mjs`**: a trivial
+`(defn main [_] "hi")`, corpus `nqueens`, `words`, `lzw` and `sudoku`, and a
+program calling `flint.data.json/read-str` and `write-str` with the json unit
+composed in. (`dijkstra` was not used: it does not compile on this tree,
+`unable to resolve symbol: sorted-set`.)
+
+### How the pieces meet
+
+* **Functions resolve by name.** An undefined function in a unit object
+  becomes an import named by its symbol; rt exports what the units import.
+  Today that is 52 functions from `flint.conc` alone, and the names are Rust
+  v0 mangled names carrying the crate hash (`_RNvMs0_NtCs8RjKiHYsuZC_8flint_rt4conc…`),
+  so **a unit is bound to the exact rt build it was compiled against** — a far
+  tighter coupling than `:abi {:runtime 1}` describes. A C-ABI facade over
+  what units import would loosen it, and would be a new published surface.
+* **Data does not resolve by name, unless the unit is PIC.** Linked as
+  `bin/build-units` builds it, `flint.conc` alone fails with `undefined symbol:
+  flint_rt::snap::REFUSED` (printed by `run`, first stage): conc reads that
+  static directly (`units-src/flint-conc/src/lib.rs`, `flint_live_import`), and
+  a non-PIC object cannot import a data address. Any `#[inline]` or generic
+  flint_rt function touching a static creates the same reference without the
+  unit's source naming one, so a source rule cannot police it. Compiled with
+  `-C relocation-model=pic` (accepted for `wasm32-unknown-unknown` objects by
+  the pinned nightly) and linked `--unresolved-symbols=import-dynamic`, it
+  imports `GOT.mem.<symbol>` as a global, and the composer supplies the
+  address — known at build time, because rt is pre-placed.
+* **Indirect calls, closures and trait objects just work.** There is one
+  table. Each module's own address-taken functions land in its own range
+  (`--table-base`), vtables in its data hold absolute table indices, and
+  `call_indirect`'s signature check is structural across instances. Nothing
+  has to be ROOTED: the cost `test/shake.clj` records for rooting every linker
+  function pointer does not exist when nothing is stubbed.
+* **The image and the heap fit without new runtime code.** `heap_start` in
+  `runtime/src/abi.rs` already takes the maximum of `__heap_base` and the end
+  of the image, so an image placed above every unit puts the heap above
+  everything.
+* **Instantiating a unit initialises its statics.** With `--import-memory`,
+  lld gives `rt` and `conc` a start function, `__wasm_init_memory`, which
+  writes their segments into the shared memory at instantiation. A snapshot
+  restore therefore has to come after every unit is instantiated.
+
+### Measured
+
+Sizes are bytes, by `bench/units-spike/measure.mjs`. *shaken* is the shipped
+door (`target/release/flint compile … :to :wasm`); *linked* is `bin/flint`;
+*composed* is `rt.wasm` + `flint.conc.wasm` (+ `flint.data.json.wasm` for the
+json program) + the image, at TODAY's unit granularity; *ideal* is the same
+with rt linked against exactly the program's own builtins. That is what
+pre-placement approaches as `flint_rt` is split finer, and it cannot go below
+it.
+
+| program | image | shaken | linked | composed | ideal |
+|---|---|---|---|---|---|
+| trivial | 24 889 | 702 964 | 516 556 | 705 964 | 547 663 |
+| nqueens | 27 058 | 705 913 | 519 537 | 708 133 | 550 642 |
+| words | 44 872 | 768 829 | 606 009 | 725 947 | 637 080 |
+| lzw | 30 266 | 721 205 | 535 408 | 711 341 | 566 505 |
+| sudoku | 30 155 | 738 482 | 565 102 | 711 230 | 596 192 |
+| json | 31 159 | 712 300 | 585 537 | 780 317 | 625 290 |
+
+* **At today's granularity, composition is the shaker's size, not the
+  linker's.** It is +0.3 to +0.4% on the two small programs, −1.4% to −5.6% on
+  the three larger ones, and +9.5% on json, whose standalone unit (68 083 bytes)
+  statically links its own copy of the sysroot code it uses. `flint.rt` IS most of the runtime. With no
+  builtin at all it is still 359 044 bytes (interpreter, collector, values and
+  what conc and json import), and its 169 builtins add 277 577 more that every
+  program carries, whether it calls them or not.
+* **Even ideally split, composition stays about 31 KB above the linker.**
+  *ideal* − *linked* is 31 071 – 31 107 bytes on all five rt-only programs and
+  39 753 with json. That is each module's own copy of the core/alloc/
+  compiler_builtins code it uses, plus the import and export names. Where a
+  real split lands between *composed* and *ideal* depends on how `flint_rt`'s
+  shared helpers divide between groups, which was not measured.
+* **The shaker today:** `bb test/shake.clj` printed `prebuilt 839653, shaken
+  707158, linked 534694 -- recovered 43%`. The gate asserts `> 0.35`.
+  **Every shipped-door module carries at least 35 476 dead bytes:**
+  `flint.bundle` APPENDS the image, descriptor and registry segments, so the
+  prebuilt loader's own 30 966-byte image (shadowed at the same address) and
+  its 4 494-byte registry (at an address the new descriptor no longer names)
+  are still in the file.
+* **A call across a module boundary**, from `bench/units-spike/calls`, in ns
+  per call, median (min) of 9 interleaved runs of 5×10⁷ calls. Load average
+  was ~160, so read these as shape rather than value:
+
+  | | one module | two modules |
+  |---|---|---|
+  | direct call | 8.09 (5.39) | 16.18 (10.75) |
+  | `call_indirect` | 16.47 (9.81) | 27.10 (11.65) |
+
+  An import costs about 2× a same-module direct call, consistent with V8 not
+  inlining across instances. By min, a cross-instance `call_indirect` costs
+  about the same as a local one. **flint reaches every builtin through
+  `call_indirect`** (`CALL_NATIVE`), so splitting builtins into units does not
+  change the hot dispatch path. What gets slower is a unit's direct calls into
+  rt helpers.
+* **End to end** (`time.mjs`, 5 interleaved rounds): `nqueens` run median 700
+  ms single, 827 ms composed (min 549 / 601). `lzw` 179 / 164 (min 132 / 149).
+  Neither difference is distinguishable from the noise at that load.
+  **Compile + instantiate**, with a nonce section defeating V8's module cache:
+  9.8 – 13.7 ms median single against 22.9 – 30.9 ms composed (min 5.8 – 7.2
+  against 6.4 – 14.5). The composed figure includes binding ~240 imports and
+  222 table slots from JavaScript.
+
+### What composition breaks
+
+* **The single-module contract.** `namespace-units` chose linking partly
+  because the output "still produces a single module": no host-side module
+  wiring. Composition gives that up, and every host would need a loader for
+  it: `guest.js` (node, browsers, workerd), and every engine
+  `cross-runtime-benchmarks` runs. That loader creates the memory and table,
+  instantiates in order, wires imports by name, supplies the `GOT.mem`
+  globals, and places the image. Two of those steps could move into the build
+  (each unit's builtins as its own element segment, and the image as a
+  data-only module), but the ordering and the wiring cannot. The PoC ran only
+  by intercepting `guest.js`'s `new WebAssembly.Instance(module, {})`. The
+  artefact becomes several modules, and `flint inspect`, the
+  compatibility key and `module-metadata-and-shards`' custom section all
+  become per-module.
+* **Stacks that do not trap.** A non-PIC link defines its own
+  `__stack_pointer`, so each unit gets its own shadow stack, and only rt's sits
+  at address 0. A unit's stack overflows into that unit's data: exactly the
+  silent corruption `the-shadow-stack-is-not-a-default` moved the stack to
+  prevent. Sharing rt's stack means importing `__stack_pointer`, which is a
+  `-shared` side module, which needs the PIC sysroot below.
+* **AOT.** `flint.link/compile-aot` appends compiled arities to a linked module
+  and calls the `aot_*` helpers by function index. Composed, a program's
+  arities would be one more pre-placed unit that imports those helpers by name
+  and owns a table range. That is arguably cleaner, and it is not built.
+* **A missing unit is a trap, not a refusal.** Run without the json unit, the
+  json program fails at the call with `null function or function signature
+  mismatch`. `compose.mjs` checks the image's native table first and refuses
+  with `no unit provides flint/json-parse`, and every host loader would have to
+  do the same.
+* **Native is unaffected, and is not the same mechanism.** The Rust and C SDKs
+  and the native CLI run the runtime natively. They link `flint-rt` and
+  `flint-conc` as crates and hand the conc builtins over themselves
+  (`sdks/rust/Cargo.toml`), with cargo's linker doing the composition at their
+  build time. Pre-placed wasm units match that MODEL (a unit registers its
+  builtins into slots), not its mechanism. Native gets no smaller or larger
+  from any option here.
+
+### The PIC alternative (`dylink.0`)
+
+`-C relocation-model=pic` works for the unit OBJECTS on the pinned nightly,
+and a static link of a PIC object with `--unresolved-symbols=import-dynamic` is
+what the PoC uses for data. A real side module (`--shared`) does not link:
+
+    liballoc-….rlib(…): relocation R_WASM_MEMORY_ADDR_LEB cannot be used against
+    symbol `.Lanon.…`; recompile with -fPIC
+
+The shipped sysroot's core/alloc/compiler_builtins are not PIC. So `-shared`
+needs `-Z build-std` with PIC (unstable), and PIC builds of every dependency
+crate (serde, xmlparser…), plus a dynamic loader in EVERY host: one that
+allocates memory and table bases, fills `GOT.func`/`GOT.mem` and runs
+`__wasm_apply_data_relocs`. That is runtime linking, which `no-runtime-linking`
+rules out. Linking the side module with everything left undefined does work
+(47 584 bytes for conc, 62 imports including `__stack_pointer`, `__memory_base`,
+`__table_base`), but only by importing core and alloc from rt as well.
+**Pre-placement is the better of the two** because placement is decided at
+build time: hosts wire names and nothing else, relocations are only ever seen
+by the build's own linker, and the sysroot stays the one rustup ships.
+
+### Pricing option 3: a linker in the artefact
+
+**A full linker for our units.** Its inputs would be `units/flint/rt.o` (950
+KB), the other unit objects, their crate rlibs and the sysroot rlibs (core 2.5
+MB, compiler_builtins 4.7 MB, alloc 0.7 MB, libm 0.15 MB): about 9.6 MB to
+ship in every door, or one pre-merged `rust-lld -r` object of 3 111 598 bytes,
+half of which is debug sections and names that could be stripped. The work:
+* an `ar` reader;
+* an object reader for the `linking` symbol table, segment info, init
+  functions and COMDATs;
+* symbol resolution (weak, hidden, COMDAT);
+* section GC;
+* layout (type dedupe; function, global, table and data assignment; the
+  synthetic `__heap_base`/`__stack_pointer`/`__indirect_function_table`);
+* about fourteen relocation types;
+* a writer.
+
+It belongs in `src/flint/` as cljc beside `flint.wasmshake`, because the
+compile path is the self-hosted compiler and has to run inside
+`flintc.wasm` on byte strings; `kin/` generates runtimes, not the compiler.
+**Estimate: 2 000 – 3 000 lines.** That is a guess from the parts list, not a
+count; `flint.wasm`, the existing reader and writer, is 536 lines. Output size
+equals rust-lld's by construction, if it is correct. The risks:
+* it tracks LLVM's object format through every nightly bump
+  (`pin-the-nightly-toolchain` already records two such breakages);
+* a wrong relocation produces a module that VALIDATES and computes the wrong
+  thing;
+* `stub-dead` already exhausted the self-hosted compiler's heap once on a
+  module this size.
+
+**A much smaller option 3, which this spike recommends: relink the prebuilt
+runtime by its own relocations.** Link `dist/flint-runtime.wasm` as today, but
+with `--emit-relocs`. Measured, that adds 205 066 bytes to the SHIPPED runtime
+(`linking` 119 762, `reloc.CODE` 81 707, `reloc.DATA` 3 597), most of it
+mangled names that a build-time pass could reduce to indices. The compiler
+then:
+1. marks EXACTLY: a `FUNCTION_INDEX` relocation is a call, a `TABLE_INDEX` is
+   an address taken, a `MEMORY_ADDR` is a data use, each attributed to its
+   symbol;
+2. deletes dead functions;
+3. patches every function and table index in place. lld leaves them as padded
+   5-byte LEBs unless asked to compress them, so no re-encoding is needed.
+
+This needs no archives, no symbol resolution and no layout, because rust-lld
+already did all three once. **Estimate: 700 – 1 000 lines**, replacing the
+byte scan in `flint.wasmshake`. Its code would match rust-lld's for the same
+roots, and data left in place costs at most the full runtime's 59 448-byte data
+section less what the program uses: about 40 KB over *linked*. That figure is
+DERIVED from the sizes above; the pass is not built. It stays one module, and
+no host changes.
+
+### Recommendation
+
+1. **Do not replace the shaker with composition now.** At today's granularity
+   it is the shaker's size (+0.4% to −5.6%, +9.5% with json). For that it
+   gives up the single-module contract on every host, and it needs PIC units,
+   unit stacks that do not trap, and an ABI made of mangled names. Its size
+   only comes once `flint_rt` is split into builtin-group crates, and even
+   then it stays ≥31 KB above the linker.
+2. **Build the relocation-guided relink next.** It removes the conservative
+   byte scan, which is behind the trap bugs `flint.wasmshake` and
+   `test/shake.clj` record. It also removes the rooting of every linker
+   function pointer, which took recovery from 55% to 44% (`test/shake.clj`). It lands within
+   about 40 KB of rust-lld, needs no host change, and is the second half of a
+   full linker if one is ever wanted.
+3. **Keep composition's mechanics for shards.** A shard
+   (`module-metadata-and-shards`, part 2) IS a pre-placed unit loaded against a
+   resident program. This spike settles how its symbols, data, table range and
+   memory range resolve.
+4. **Do not build the full linker.** It adds archive handling and symbol
+   resolution over 3 – 10 MB of inputs per door, for the roughly 40 KB the
+   relink leaves.
+5. **Independently, and small:** have `flint.bundle` REPLACE the prebuilt
+   image and registry segments rather than append over them. That is at least
+   35 476 bytes off every shipped-door module.
+
+### Migration sketch, for 2
+
+1. `bin/build-dist` also links the runtime with `--emit-relocs`, and reduces
+   `linking`/`reloc.*` to a compact edge sidecar: per function, its calls,
+   table references and data symbols; per data symbol, its table references.
+2. `flint.wasmshake` reads edges from the sidecar instead of scanning bytes.
+   Its roots become the exports plus the builtins the image calls, not every
+   table element.
+3. Phase one keeps STUBBING, with exact edges: a size win with no renumbering
+   risk. Phase two deletes, renumbers through the relocation sites, and
+   compacts the element segment.
+4. `test/shake.clj` raises its floor to whatever is then measured, and gains
+   an exactness check: every function the linker keeps, the shaker keeps,
+   compared by name in a `--keep-names` build.
+5. The byte scan is retired.
+
+If composition is ever pursued, for shards or otherwise, it needs:
+* unit objects built PIC;
+* a C-ABI facade for the rt functions units import;
+* the memory and table map as a `dist/` artefact beside `slots.json`;
+* each unit's builtin element segment, and an image module, baked at build
+  time;
+* a loader in every host.
 
 ---
 
