@@ -617,11 +617,22 @@ pub(crate) enum Body {
 /// which reads the library from text to measure what the forms save, and the
 /// EDN spec `FLINT_SPEC_OUT` and `FLINT_CHECK_SPLIT` compare against.
 fn stdlib_text(path: &str) -> Result<String> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("lib").join(path);
+    // Relative to the CURRENT DIRECTORY, not `env!("CARGO_MANIFEST_DIR")`. The
+    // old version resolved against where this binary was BUILT -- a compile-time
+    // `&'static str` literal that `--remap-path-prefix` cannot touch (that
+    // rewrites `file!()`/debuginfo locations, not `env!()` expansions), so it
+    // baked the builder's checkout path into every release of this binary
+    // (DECISIONS.md#reproducible-build-paths). Every caller of the env vars
+    // below (`test/cli.clj`, `bin/conform-hosts`) already runs
+    // `./target/release/flint` from the repo root, which is also where `lib/`
+    // actually is for THIS checkout -- the thing this dev-only hook is
+    // supposed to measure -- so CWD is the more correct answer, not just the
+    // reproducible one.
+    let p = Path::new("lib").join(path);
     fs::read_to_string(&p).map_err(|e| anyhow::anyhow!(
         "this binary carries the standard library READ, not as text; reading it as text \
          (FLINT_PREREAD=0, FLINT_SPEC_OUT, FLINT_CHECK_SPLIT) needs the source tree it was \
-         built from, and {} is not there: {e}", p.display()))
+         built from, and lib/{path} is not there: {e}"))
 }
 
 fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,

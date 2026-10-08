@@ -9,6 +9,10 @@ set -e
 cd "$(dirname "$0")/../.."
 
 echo "== building the C ABI"
+# Remapped for the reason `bin/build-cli` is (DECISIONS.md#reproducible-build-paths):
+# this staticlib is what a C/C++ program links, and an unremapped build
+# embeds the checkout path of whoever ran it into that program.
+export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
 cargo build --release -p flint-c
 
 LIB=target/release

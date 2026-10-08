@@ -109,7 +109,15 @@ jobs:
 
       - name: Build the binary
         shell: bash
-        run: cargo +nightly build -p flint-cli --release --target ${{ matrix.target }}
+        # Remapped (DECISIONS.md#reproducible-build-paths): without this, the
+        # shipped binary embeds the runner's own checkout path
+        # (`/home/runner/work/...`, `/Users/runner/work/...`, or the
+        # Windows equivalent) and its cargo-registry cache path in every
+        # panic location, so a `flint-linux-x86_64` built today and one built
+        # from the same commit tomorrow are not byte-identical.
+        run: |
+          export RUSTFLAGS="$(./bin/rust-remap-flags) ${RUSTFLAGS:-}"
+          cargo +nightly build -p flint-cli --release --target ${{ matrix.target }}
 
       # A binary that builds and cannot compile a program is not a release
       # artifact. Every platform proves it for itself.

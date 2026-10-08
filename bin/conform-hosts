@@ -104,7 +104,7 @@ cd "$(dirname "$0")/.."
 # nothing at all and dropped out of the total. A timing harness that silently
 # omits a phase is the same fault as a gate that silently omits a check.
 phase "native: rebuild the reference answer"
-cargo build --release -p flint-cli > "$FLINT_SCRATCH"/flint-cli-build.log 2>&1 \
+./bin/build-cli > "$FLINT_SCRATCH"/flint-cli-build.log 2>&1 \
   || { tail -20 "$FLINT_SCRATCH"/flint-cli-build.log; \
        echo "  FAIL the native runtime does not build, so there is nothing to compare against"; \
        exit 1; }

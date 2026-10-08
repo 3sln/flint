@@ -1,0 +1,66 @@
+#!/bin/sh
+# SHIPPED ARTIFACTS MUST NOT EMBED THIS CHECKOUT'S OWN PATH, OR $HOME.
+# (DECISIONS.md#reproducible-build-paths)
+#
+# A regression here is invisible everywhere else: the artifact still loads
+# and runs, it is only not byte-identical to the same commit built from a
+# different checkout path or a different developer's home directory. That is
+# exactly the shape AGENTS.md section 5 warns about for access checks -- a
+# broken guard and a working one produce the same passing suite -- so this
+# greps the actual shipped bytes rather than reading the build scripts and
+# trusting that they still call `bin/rust-remap-flags`.
+#
+# `grep -a`, not `strings`: the latter is not guaranteed present on a minimal
+# CI image, and grep treating the file as text either way finds the same
+# ASCII path bytes.
+#
+# `LC_ALL=C`, NOT THE AMBIENT LOCALE -- found by deliberately breaking this
+# check before trusting it (AGENTS.md section 3): built a binary WITHOUT
+# `bin/rust-remap-flags` on purpose, confirmed by `python3`'s byte-level
+# `bytes.count()` that the checkout path and `$HOME/.cargo` were both in
+# `target/release/flint` (2 and 167 occurrences), and the native macOS
+# `/usr/bin/grep -a` still reported NO match under the default locale --
+# silently, exit 1, same as a clean binary. `LC_ALL=C` made the same `grep -a`
+# find it. A locale-sensitive grep treating a Mach-O binary's bytes as
+# invalid multibyte sequences and dropping the match is exactly
+# `AGENTS.md`'s "fails open": the broken check and the working one produce
+# the same passing output.
+set -e
+export LC_ALL=C
+cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
+fail=0
+n=0
+
+check() {
+  f="$1"
+  n=$((n + 1))
+  if grep -qaF "$ROOT" "$f"; then
+    echo "  FAIL $f embeds this checkout's own path: $ROOT"
+    fail=1
+  fi
+  if grep -qaF "$HOME/.cargo" "$f"; then
+    echo "  FAIL $f embeds \$HOME/.cargo: $HOME/.cargo"
+    fail=1
+  fi
+}
+
+for f in dist/flint-runtime.wasm dist/flint-runtime-aot.wasm dist/flint-loader.wasm \
+         dist/flintc.wasm dist/flintc.bytecode target/release/flint; do
+  [ -f "$f" ] && check "$f"
+done
+
+if [ "$n" -eq 0 ]; then
+  echo "  --   check-build-paths: nothing built yet to check (bin/build-dist / bin/build-cli first)"
+  exit 0
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "  A build-path leak like this is invisible to every other check -- the"
+  echo "  artifact still works, it is just not reproducible across checkouts. Build"
+  echo "  through bin/build-cli and bin/build-units, which set RUSTFLAGS from"
+  echo "  bin/rust-remap-flags, not a bare cargo/rustc invocation."
+  exit 1
+fi
+echo "check-build-paths: $n shipped artifact(s) checked, none embed this checkout's path or \$HOME"

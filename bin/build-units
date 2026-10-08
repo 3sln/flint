@@ -30,7 +30,16 @@ if [ ! -d "$SYS" ]; then
   exit 1
 fi
 DEPS=target/wasm32-unknown-unknown/release/deps
-FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0"
+# REMAP, not restated: `bin/rust-remap-flags` is the one definition of the
+# checkout-path and cargo-registry-path remap (DECISIONS.md#reproducible-build-paths).
+# Appending it to every direct rustc call is a safe no-op where the call's own
+# sources already use repo-relative paths (`units-src/.../lib.rs`), since the
+# FROM prefix then never appears in what gets embedded, and it is what fixes
+# the cargo-built dependency rlibs (`flint_rt`, `serde_json`, `htmlparser`...)
+# that the `cargo build` below links into every one of them.
+REMAP="$(./bin/rust-remap-flags)"
+export RUSTFLAGS="$REMAP ${RUSTFLAGS:-}"
+FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 $REMAP"
 
 # Two builds (DECISIONS.md#two-builds). A production module carries NO diagnostic
 # machinery -- absent, not disabled -- so it is a cargo feature rather than a

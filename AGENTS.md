@@ -81,9 +81,17 @@ does not announce itself; it presents as a real finding.
 
 | What you changed | What must be rebuilt, in order |
 |---|---|
-| `src/` — the COMPILER | `bin/build-dist`, then `cargo build --release -p flint-cli`, then `sdks/cli/build` |
-| `lib/` — the stdlib | `bin/build-dist`, then `cargo build --release -p flint-cli`, then `sdks/cli/build` |
+| `src/` — the COMPILER | `bin/build-dist`, then `bin/build-cli`, then `sdks/cli/build` |
+| `lib/` — the stdlib | `bin/build-dist`, then `bin/build-cli`, then `sdks/cli/build` |
 | unit modules | `bin/build-units` |
+
+`bin/build-cli` is `cargo build --release -p flint-cli` with the checkout path
+and cargo-registry path remapped to stable placeholders
+(`DECISIONS.md#reproducible-build-paths`) — call it instead of the bare
+command, and everything else in this tree that builds the same crate
+(`bin/test`, `bin/conform-hosts`, CI's `binaries.yml`) does the same, because a
+second invocation of the same package with different `RUSTFLAGS` invalidates
+cargo's cache for it rather than reusing what the first one built.
 
 The two halves are embedded by different routes, and that is the trap.
 `cli/build.rs` reads `lib/` from source at build time, so a stdlib change needs
@@ -277,7 +285,7 @@ in `dist/` are tracked, but `flintc.bytecode`, `flintc.wasm`,
 
 ```
 export JAVA_HOME=/opt/homebrew/opt/openjdk        # see below
-cd ../flint-<topic> && ./bin/build-dist && cargo build --release -p flint-cli
+cd ../flint-<topic> && ./bin/build-dist && ./bin/build-cli
 ./sdks/esm/build && ./bin/check-ports
 ```
 

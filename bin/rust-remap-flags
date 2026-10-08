@@ -1,0 +1,38 @@
+#!/bin/sh
+# ONE DEFINITION of the path-remap RUSTFLAGS, read by every build site that
+# runs cargo or rustc on anything shipped: `bin/build-units` (dist/*.wasm and
+# the units it links), `bin/build-cli` (the native CLI AGENTS.md documents as
+# `cargo build --release -p flint-cli`), `sdks/c/build`, `bin/check-llvm`'s
+# `flint-native-abi` build, and `.github/workflows/binaries.yml`'s release
+# matrix. See `DECISIONS.md#reproducible-build-paths`.
+#
+# WITHOUT THIS, a `panic!`/`unwrap()`/`assert!` location -- `file!()` under the
+# hood -- embeds the ABSOLUTE checkout path of whoever ran the build, and a
+# third-party dependency's source embeds `$HOME`/cargo-registry. Two checkouts
+# of the same commit at different paths, or two developers' home directories,
+# then produce DIFFERENT BYTES for the same source: measured, 464 bytes of
+# `dist/flint-runtime.wasm` and 112 of `dist/flintc.wasm` differed between two
+# worktrees of the one commit that differed only in directory name length, and
+# every byte of `target/release/flint` past the embedded panic strings
+# differed too (`cmp -l` counted over 1.8M differing bytes in a 5.4 MB binary,
+# because LTO + a single codegen unit scatters those strings' addresses
+# through the whole layout).
+#
+# `trim-paths` is cargo's purpose-built answer to exactly this and needs no
+# absolute path to be named -- but it is STILL GATED ON NIGHTLY as of the
+# toolchains pinned here: `[profile.release] trim-paths = "all"` in a plain
+# `cargo build --release -p flint-cli` on stable cargo 1.92.0 refused with
+# "the package requires the Cargo feature called `trim-paths`, but that
+# feature is not stabilized in this version of Cargo" -- checked directly,
+# not assumed from its vintage. So this computes the equivalent
+# `--remap-path-prefix` flags by hand, which IS stable on every rustc this
+# repo uses.
+#
+# The rustup/rustc sysroot is NOT remapped here: the standard library's own
+# panic locations already read `/rustc/<commit-hash>/library/...`, baked in by
+# the Rust project's own release build and identical for anyone running that
+# exact rustc, so there is nothing of ours to fix there.
+set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REGISTRY="${CARGO_HOME:-$HOME/.cargo}/registry/src"
+printf '%s' "--remap-path-prefix=$ROOT=/flint --remap-path-prefix=$REGISTRY=/cargo-registry"

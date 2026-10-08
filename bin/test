@@ -165,8 +165,8 @@ sec "rust: the native CLI, which everything below runs"
 ./bin/build-dist > /tmp/flint-cli-build.log 2>&1 \
   || { show_build_log /tmp/flint-cli-build.log; fail "bin/build-dist (before the first CLI build)"; }
 ./bin/check-dist || fail "check-dist (before the first CLI build)"
-cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
-  || { show_build_log /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
+./bin/build-cli > /tmp/flint-cli-build.log 2>&1 \
+  || { show_build_log /tmp/flint-cli-build.log; fail "bin/build-cli"; }
 echo "  ok"
 
 # THE NPM DOOR, BUILT HERE TOO, for the same reason the native CLI just was:
@@ -640,8 +640,8 @@ sec "distributable: the compiler and loader, driven by the SDK alone"
 # compiler -- so a stale embedding makes them disagree by a few hundred bytes
 # and reports a DIVERGENCE BETWEEN FRONT ENDS that does not exist. Measured: a
 # constant 893 bytes on every arm, which is exactly the shape of a real one.
-cargo build --release -p flint-cli > /tmp/flint-test.out 2>&1 \
-  || { show_build_log /tmp/flint-test.out; fail "cargo build --release -p flint-cli (after build-dist)"; }
+./bin/build-cli > /tmp/flint-test.out 2>&1 \
+  || { show_build_log /tmp/flint-test.out; fail "bin/build-cli (after build-dist)"; }
 # The SDK is a separate package with its own build (`sdks/`), and what is
 # tested is the DISTRIBUTABLE: one portable ESM with the artifacts inside it.
 ./sdks/esm/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/esm/build"; }
@@ -723,8 +723,8 @@ sec "binary: the single-file CLI, compiling and running with nothing installed"
 # Built against dist/, which the section above just rebuilt. This is the
 # release artifact, so what is asserted is what a user does with it: compile a
 # program and run the result.
-cargo build -p flint-cli --release > /tmp/flint-test.out 2>&1 \
-  || { show_build_log /tmp/flint-test.out; fail "cargo build -p flint-cli"; }
+./bin/build-cli > /tmp/flint-test.out 2>&1 \
+  || { show_build_log /tmp/flint-test.out; fail "bin/build-cli"; }
 rm -rf /tmp/flint-smoke && mkdir -p /tmp/flint-smoke
 printf '(ns smoke (:require [clojure.string :as s]))\n(defn main [args] (s/upper-case (str "ok " (reduce + 0 (range 10)))))\n' \
   > /tmp/flint-smoke/smoke.cljc

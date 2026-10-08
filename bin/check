@@ -60,7 +60,7 @@ t0=$(date +%s)
 for c in check-version check-contracts check-decisions check-flattens check-builtins check-sys-catalogue check-containment \
          check-snapshot-layout check-aotstat-layout check-port-consts check-artifact-ops \
          check-generated-reached check-vocab-used check-esm-portable dead-runtime-fns check-toc-current \
-         check-flint-check-surface; do
+         check-flint-check-surface check-build-paths; do
   ./bin/$c || fail "bin/$c"
 done
 
