@@ -71,10 +71,13 @@
                     getAbsoluteFile getParentFile getParentFile getParentFile)
                 "bin" "nightly-toolchain")))
 
-(defn lld-path []
+(defn- toolchain-root []
   (let [nightly (str/trim (slurp nightly-file))
-        rustc (run-out "rustup" "which" "--toolchain" nightly "rustc")
-        tc (.. (io/file rustc) getParentFile getParentFile)
+        rustc (run-out "rustup" "which" "--toolchain" nightly "rustc")]
+    [(.. (io/file rustc) getParentFile getParentFile) nightly]))
+
+(defn lld-path []
+  (let [[tc nightly] (toolchain-root)
         rustlib (io/file tc "lib" "rustlib")
         hit (->> (or (.listFiles rustlib) (make-array java.io.File 0))
                  (keep #(let [f (io/file % "bin" "rust-lld")] (when (.exists f) f)))
@@ -84,18 +87,41 @@
       (throw (ex-info (str "no rust-lld under " rustlib " (toolchain " nightly ")")
                       {:toolchain nightly :rustlib (str rustlib)})))))
 
-(defn- sh! [args]
-  (let [p (.exec (Runtime/getRuntime) (into-array String (map str args)))
-        out (slurp (.getInputStream p))
-        err (slurp (.getErrorStream p))
-        code (.waitFor p)]
-    (when-not (zero? code)
-      ;; With the message, not just the name. A linker failure that prints only
-      ;; the path of the linker is a bad welcome, and this file says so about a
-      ;; smaller thing three lines up.
-      (throw (ex-info (str "command failed: " (first args) "\n" err out)
-                      {:code code :err err :out out})))
-    {:out out :err err}))
+;; `rust-lld` on this pinned nightly links against a SHARED `libLLVM.dylib`/
+;; `.so` (`otool -l` shows `LC_RPATH @loader_path/../lib`, which resolves to
+;; `lib/rustlib/<triple>/lib` -- a directory that does not exist; the real
+;; file sits one level higher, at the toolchain root's own `lib/`). Invoked
+;; normally, as `rustc`'s own linker subprocess, `rustc` sets up the dynamic
+;; loader's search path itself before running it; invoked directly, as this
+;; file always has (`DECISIONS.md#pin-the-nightly-toolchain`'s "second,
+;; independent bug" already fixed `lld-path` once for a path that only
+;; existed on one platform), nothing does. Without this, every direct
+;; `rust-lld` call on this nightly fails at process start with
+;; `Library not loaded: @rpath/libLLVM.dylib` (macOS) -- found building
+;; `units/.reader/flint-reader.wasm`, the one other direct `rust-lld`
+;; invocation (`bin/build-units`), which needed the identical fix.
+(defn- lld-env []
+  (let [[tc _] (toolchain-root)
+        lib (str (io/file tc "lib"))
+        add (fn [k] [k (str lib ":" (or (System/getenv k) ""))])]
+    (into {} [(add "DYLD_LIBRARY_PATH") (add "LD_LIBRARY_PATH")])))
+
+(defn- sh!
+  ([args] (sh! args nil))
+  ([args extra-env]
+   (let [env (merge (into {} (System/getenv)) extra-env)
+         envp (into-array String (map (fn [[k v]] (str k "=" v)) env))
+         p (.exec (Runtime/getRuntime) (into-array String (map str args)) envp)
+         out (slurp (.getInputStream p))
+         err (slurp (.getErrorStream p))
+         code (.waitFor p)]
+     (when-not (zero? code)
+       ;; With the message, not just the name. A linker failure that prints only
+       ;; the path of the linker is a bad welcome, and this file says so about a
+       ;; smaller thing three lines up.
+       (throw (ex-info (str "command failed: " (first args) "\n" err out)
+                       {:code code :err err :out out})))
+     {:out out :err err})))
 
 ;; `current-abi` MOVED TO `flint.wasm`, which owns `describe` -- the function that
 ;; consumes it -- and which every caller already requires. It was defined here and
@@ -335,7 +361,7 @@
                      ["-o" out-path]
                      objs
                      rlibs)]
-    (sh! args)
+    (sh! args (lld-env))
     (with-open [in (io/input-stream out-path)]
       (.readAllBytes in))))
 

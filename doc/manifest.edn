@@ -421,14 +421,8 @@
     ->Vec
     ->VecNode
     ->VecSeq
-    -add-loaded-lib
     -cache-protocol-fn
-    -new-dynamic-var
-    -new-var
-    -reified-methods
     -reset-methods
-    -run-in-transaction
-    -with-precision
     ..
     EMPTY-NODE
     Inst
@@ -471,7 +465,6 @@
     bigint
     biginteger
     binding
-    binding-conveyor-fn
     boolean-array
     booleans
     bound-fn
@@ -548,12 +541,9 @@
     gen-interface
     get-method
     get-proxy-class
-    get-thread-binding-frame-impl
     get-thread-bindings
     get-validator
-    global-hierarchy
     halt-when
-    has-root-impl
     hash-combine
     import
     in-ns
@@ -588,9 +578,6 @@
     method-sig
     methods
     mix-collection-hash
-    multi-fn-add-method-impl
-    multi-fn-impl
-    multi-fn?-impl
     munge
     namespace-munge
     newline
@@ -627,9 +614,7 @@
     println
     prn
     promise
-    protocol-type-impl
     proxy
-    proxy*
     proxy-call-with-super
     proxy-mappings
     proxy-name
@@ -658,7 +643,6 @@
     refer
     refer-clojure
     reify
-    reify*
     release-pending-sends
     remove-all-methods
     remove-method
@@ -669,7 +653,6 @@
     require
     requiring-resolve
     reset-meta!
-    reset-thread-binding-frame-impl
     resolve
     restart-agent
     resultset-seq
@@ -707,7 +690,6 @@
     subseq
     supers
     sync
-    system-time
     tap>
     test
     the-ns

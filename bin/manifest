@@ -4,7 +4,8 @@
 ;;
 ;; Generated rather than written, and checked by test/manifest.clj, because a
 ;; hand-maintained table in a README drifts the moment somebody adds a function.
-(require '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.fs :as fs])
+(require '[clojure.string :as str] '[clojure.java.io :as io]
+         '[clojure.edn :as edn] '[babashka.fs :as fs])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (babashka.classpath/add-classpath (str root "/src"))
 (require '[flint.reader :as reader] '[flint.compiler :as compiler] '[flint.macros :as macros])
@@ -90,49 +91,41 @@
                (reader/read-all src {:file file :features #{:flint}}))]
     (into {} (mapcat defined-by (filter seq? forms)))))
 
-(def babashka-blind-spot
-  "Vars REAL `clojure.core` publishes that babashka does not.
+(def real-clojure-core
+  "The public vars real Clojure 1.12.1's `clojure.core` publishes -- read ONCE
+  from a real JVM Clojure and committed to `bin/clojure-core-publics.edn`,
+  never introspected from the interpreter EXECUTING this script.
 
-  THE BASELINE IS NOT CLOJURE. This script runs on babashka, and the comment
-  above already says what that costs -- \"diffing against them would report
-  gaps in flint that are really gaps in the baseline\" -- and then leaves
-  `clojure.core` in the map anyway. It is wrong in BOTH directions there:
-  babashka publishes 624 of real Clojure's 679, so 73 names are invisible.
+  This script runs on babashka, and babashka's bundled `clojure.core` (its sci
+  implementation) is not real Clojure -- the comment above already says what
+  that costs for the other compared namespaces (\"diffing against them would
+  report gaps in flint that are really gaps in the baseline\"). For
+  `clojure.core` specifically it used to be patched with a hardcoded
+  `babashka-blind-spot` set (vars real Clojure has that babashka's bundled
+  core, AS OF SOME PAST BABASHKA VERSION, did not) -- a second list trying to
+  correct the first, the shape `AGENTS.md`'s \"one list, not two\" warns about.
+  It broke the moment the babashka pin moved: bumping from v1.3.190 to
+  v1.13.225 changed FOUR names in babashka's own bundled `clojure.core` with
+  no change to real Clojure at all -- `-locking-impl`, `req!` and `some-vals`
+  newly PRESENT (babashka's own internal-helper churn, not real Clojure vars,
+  so `ns-publics` on that babashka now reports names the blind-spot set never
+  anticipated needing to EXCLUDE), `binding-conveyor-fn` newly ABSENT (so the
+  blind-spot set would have needed a new entry just to stay correct against
+  the same real baseline). `doc/manifest.edn`'s `:absent` list for
+  `clojure.core` became a function of the babashka VERSION this script
+  happens to run on, not of flint or of Clojure
+  (`DECISIONS.md#pin-the-babashka-version`). Reading a static snapshot of the
+  real baseline instead removes the dependency outright, rather than patching
+  babashka's answer release by release.
 
-  Measured, against Clojure 1.12.1:
+  Regenerate `bin/clojure-core-publics.edn` when the real Clojure version
+  flint targets moves (currently 1.12.1, named in that file's own header):
 
-    :extra   said flint invented 34 names. Three of them -- `volatile?`,
-             `println-str` and `find-protocol-method` -- are real
-             `clojure.core` vars that babashka lacks. The README told
-             readers flint had added them.
-    :absent  said 306. Seventy of the blind spot are names flint lacks too,
-             and the gate could not see them. The true figure is 376.
+      clojure -M -e '(->> (ns-publics (quote clojure.core)) keys (map name) sort (run! println))'
 
-  MOST OF THE SEVENTY ARE JVM AND FLINT WILL NEVER HAVE THEM -- agents,
-  proxies, classloaders, `->VecNode`. That is a judgement this document should
-  MAKE, in the open, rather than arrive at by accident through a baseline that
-  cannot see the question.
-
-  Regenerate with a real Clojure when the pinned version moves:
-
-      clojure -M -e '(->> (ns-publics (quote clojure.core)) keys (map name) sort)'
-
-  and subtract babashka's answer to the same."
-  '#{
-    *agent* *allow-unresolved-vars* *fn-loader* *repl* *source-path*
-    *suppress-read* *use-context-classloader* *verbose-defrecords*
-    ->ArrayChunk ->Vec ->VecNode ->VecSeq -cache-protocol-fn -reset-methods
-    EMPTY-NODE Inst accessor add-classpath agent-errors await1 bases cast
-    clear-agent-errors compile construct-proxy create-struct definline
-    definterface defstruct ensure extenders find-keyword find-protocol-impl
-    find-protocol-method gen-class gen-interface get-proxy-class import
-    init-proxy inst-ms* io! load load-reader method-sig mix-collection-hash
-    partitionv partitionv-all pcalls primitives-classnames print-ctor
-    print-simple println-str proxy-call-with-super proxy-mappings proxy-name
-    proxy-super pvalues ref-history-count ref-max-history ref-min-history
-    resultset-seq splitv-at stream-into! stream-reduce! stream-seq!
-    stream-transduce! struct struct-map unquote-splicing update-proxy
-    vector-of volatile? with-loading-context})
+  one name per line, sorted, wrapped as `#{...}`."
+  (into (sorted-set)
+        (map symbol (edn/read-string (slurp (io/file root "bin/clojure-core-publics.edn"))))))
 
 (def clojure-special-forms
   "Names Clojure HAS that no `ns-publics` anywhere will show, because they are
@@ -152,13 +145,15 @@
   '#{letfn*})
 
 (defn clojure-publics [ns-sym]
-  (try
-    (require ns-sym)
-    (let [theirs (set (map (comp symbol name) (keys (ns-publics (find-ns ns-sym)))))]
-      (if (= ns-sym 'clojure.core)
-        (into (into theirs babashka-blind-spot) clojure-special-forms)
-        theirs))
-    (catch Throwable _ nil)))
+  (if (= ns-sym 'clojure.core)
+    ;; The static baseline (`real-clojure-core`), not this interpreter's own
+    ;; `clojure.core` -- see its docstring. `letfn*` is still merged in: it is
+    ;; a special form in flint, never a var even in real Clojure's ns-publics.
+    (into real-clojure-core clojure-special-forms)
+    (try
+      (require ns-sym)
+      (set (map (comp symbol name) (keys (ns-publics (find-ns ns-sym)))))
+      (catch Throwable _ nil))))
 
 (def bootstrap-macros
   "Macros the compiler knows without compiling anything. They are as present as

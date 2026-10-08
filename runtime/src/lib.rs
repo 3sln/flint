@@ -7,6 +7,17 @@
 
 #![no_std]
 #![allow(clippy::missing_safety_doc)]
+// Nightly-only, and gated to the one target that needs it: `mem.rs`'s
+// `__rust_no_alloc_shim_is_unstable_v2` (DECISIONS.md#pin-the-nightly-toolchain)
+// has to be defined the same way liballoc's own call site declares it --
+// `#[rustc_std_internal_symbol]`, not `#[no_mangle]` -- or its compiled
+// symbol name does not match what liballoc's precompiled sysroot calls (a
+// MANGLED name, found by inspecting `units/flint/rt.o`'s own import, not by
+// reading the attribute's name and assuming). Native/host builds use the
+// ordinary installed (stable) toolchain and never touch this module, so the
+// feature gate itself must not reach them -- `cfg_attr`, not a plain
+// `#![feature(..)]`, which a stable compiler rejects outright.
+#![cfg_attr(target_arch = "wasm32", feature(rustc_attrs))]
 
 // `unused_comparisons` IS AN ERROR IN THIS CRATE, and it is here rather than
 // only on `kgen` because the trap is not confined to generated code. kin's
@@ -97,14 +108,31 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 // rustc synthesises these in the allocator shim when IT drives the final link.
 // flint drives the link itself (doc/unit-format.md), so we provide them.
+//
+// `#[rustc_std_internal_symbol]`, NOT `#[no_mangle]`, on the two FUNCTIONS
+// here (DECISIONS.md#pin-the-nightly-toolchain). liballoc's own `unsafe
+// extern "Rust" { #[rustc_std_internal_symbol] fn .. }` declarations compile
+// calls to these as a MANGLED v0 name (confirmed by disassembling
+// `units/flint/rt.o`'s unresolved import, not by reading the attribute's
+// name and assuming); `#[no_mangle]` emits the literal plain name instead,
+// which does not match and left both undefined at the final `rust-lld` link
+// -- first `__rust_no_alloc_shim_is_unstable_v2` (new on this nightly, added
+// by rust-lang/rust#141061), then `__rust_alloc_error_handler` (already
+// here, under the attribute that stopped matching). The two STATICS below
+// are unaffected -- current liballoc's source calls neither of them at all
+// (dead on the versions this was checked against, kept rather than removed
+// in case an older target still expects them) -- which is why only the two
+// functions needed the attribute changed.
 #[cfg(target_arch = "wasm32")]
 mod alloc_shim {
     #[no_mangle]
     pub static __rust_no_alloc_shim_is_unstable: u8 = 0;
     #[no_mangle]
     pub static __rust_alloc_error_handler_should_panic: u8 = 0;
-    #[no_mangle]
-    pub extern "C" fn __rust_alloc_error_handler(_size: usize, _align: usize) -> ! {
+    #[rustc_std_internal_symbol]
+    unsafe extern "Rust" fn __rust_no_alloc_shim_is_unstable_v2() {}
+    #[rustc_std_internal_symbol]
+    unsafe extern "Rust" fn __rust_alloc_error_handler(_size: usize, _align: usize) -> ! {
         core::arch::wasm32::unreachable()
     }
 }

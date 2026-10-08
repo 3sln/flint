@@ -16722,9 +16722,11 @@ removes, with no interim fix. Still open:
 
 **Ratified:** ☐ not signed off
 
-**Status: built 2026-10-06.** `bin/build-units`, `bin/build-test-unit` and
+**Status: built 2026-10-06, re-pinned 2026-10-08 (see "Upgraded to
+nightly-2026-10-01" below -- that section carries the current pin and what
+moving it this time cost).** `bin/build-units`, `bin/build-test-unit` and
 `bin/cargo-wasm` resolve the nightly toolchain via `bin/nightly-toolchain`
-(currently `nightly-2024-10-12`) instead of the rolling `nightly` alias, and
+(currently `nightly-2026-10-01`) instead of the rolling `nightly` alias, and
 `.github/workflows/test.yml`, `publish.yml` and `binaries.yml` install that
 same pinned toolchain rather than `rustup toolchain install nightly`.
 `src/flint/link.cljc`'s `lld-path` reads the same file (it used to hardcode
@@ -16835,6 +16837,123 @@ not touch `bin/build-units`'s lookup logic itself.
 `./bin/build-dist` still produces `target/wasm32-unknown-unknown/release/deps/lib*.rlib`
 for every workspace dependency with the candidate date, the same way this one
 was found.
+
+### Upgraded to nightly-2026-10-01, 2026-10-08
+
+**Built 2026-10-08, verified end to end on macOS/aarch64 (`bin/build-units`,
+`bin/build-dist`, `bin/build-cli`, `sdks/cli/build` -- its own selftest
+green, byte-identical across both doors for every target including
+`:to :clr` and `:to :jvm`). Linux is CI's job, not this box's (AGENTS.md
+§3's gate table); see the dispatched run this commit cites.**
+
+`bin/nightly-toolchain` moves from `nightly-2024-10-12` to
+`nightly-2026-10-01`, closing the "Risk left open" above (`rlib()`'s
+`deps/`-only lookup, "fragile against a *future* nightly changing this
+layout again") rather than leaving it for the next bump to rediscover. Three
+independent breakages, found in the order a clean `rm -rf
+target/wasm32-unknown-unknown units && sh bin/build-units` surfaced them:
+
+**1. `rlib()` itself, fixed as the risk predicted.** `bin/cargo-artifacts.py`
+(new) reads cargo's own `--message-format=json-render-diagnostics` stream
+instead of a directory convention: `rlibs <json-log> <dest-dir>` copies every
+`.rlib`/`.rmeta` any `compiler-artifact` message named into `$DEPS`, wherever
+cargo actually put it, and `diagnostics <json-log>` prints every
+`compiler-message`'s rendered text in order -- which is also what fixes the
+original CI incident this decision opened with (52 warnings sorting after
+the real `error[...]`, lost to a plain `tail -20`): reading cargo's own
+message stream can always find the error regardless of how many warnings
+come after it in the log.
+
+**2. A second cargo behaviour the "Risk left open" paragraph did not
+anticipate: a build-script crate's `.rlib` is now a METADATA STUB.**
+`libm` (and, newly, `memchr`) place a full-metadata `.rmeta` beside a
+`.rlib` that carries real compiled code but only a stub metadata section.
+Passing that stub to `--extern libm=<path>.rlib` for a non-final compile
+(`rustc --emit=obj`/`--emit=link` for `flint_rt`, or a parser unit's own
+build) fails: `only metadata stub found for \`rlib\` dependency \`libm\`
+please provide path to the corresponding .rmeta file with full metadata` --
+confirmed this is positional, not a search-path problem, by reproducing it
+with `-L $DEPS` added and unchanged. `bin/build-units` now has two lookups
+where it had one: `rlib()` (the real `.rlib`, for the final `rust-lld` link
+and for copying into a unit's `.libs/`) and `metalib()` (the `.rmeta` when
+one exists, else falls back to `rlib()` -- for every `--extern NAME=` rustc
+itself resolves). Using the wrong one is silent in the OTHER direction too:
+`metalib()`'s result was briefly also fed to `cp "$LIBM" units/.sysroot/`
+(copied for `flint.link`'s OWN later link of `dist/flint-loader.wasm`), which
+failed `undefined symbol: libm::math::trunc::trunc` and the rest of libm's
+surface -- a metadata-only file has no code to link against. Fixed by
+sourcing that copy from `rlib()`, not the `metalib()` variable reused from
+the unit build above it.
+
+**3. The new allocator-shim symbol, and an old one, both reference a
+MANGLED name now.** `alloc::alloc::alloc`/`alloc_zeroed` tail-call
+`__rust_no_alloc_shim_is_unstable_v2` unconditionally as of
+rust-lang/rust#141061 (merged 2025-06-18, so every nightly after it,
+including this one) -- new on top of the `__rust_alloc_error_handler` this
+runtime already hand-provided (`runtime/src/lib.rs`'s `alloc_shim` module,
+there since `#[global_allocator]` without rustc's own shim needed it before
+this bump). Both are declared on liballoc's side as `unsafe extern "Rust" {
+#[rustc_std_internal_symbol] fn .. }`, and -- found by disassembling
+`units/flint/rt.o`'s own unresolved import rather than by reading the
+attribute's name and assuming -- that attribute compiles the CALLER's
+reference to a v0-MANGLED name (`_RNvCs..._7___rustc35___rust_no_alloc_shim_is_unstable_v2`,
+i.e. the path `__rustc::__rust_no_alloc_shim_is_unstable_v2`), not the plain
+literal name `#[no_mangle]` produces on the defining side. The existing
+`__rust_alloc_error_handler`, defined `#[no_mangle] extern "C"` since
+whenever it was first added, had been satisfying an OLDER nightly's
+differently-shaped reference by coincidence; on this one it needed the same
+attribute change. Fixed by defining both as `#[rustc_std_internal_symbol]
+unsafe extern "Rust" fn ..` in `alloc_shim`, which needed
+`#![cfg_attr(target_arch = "wasm32", feature(rustc_attrs))]` at the crate
+root -- `cfg_attr`, not a plain `#![feature(..)]`, because the native/host
+build of this same crate (`cargo test -p flint-rt`, used for the collector
+unit tests) runs on the ordinary installed STABLE toolchain and never
+touches the wasm32-only `alloc_shim` module, so the feature gate itself must
+not reach it. The two plain STATICS already in `alloc_shim`
+(`__rust_no_alloc_shim_is_unstable` without `_v2`, and
+`__rust_alloc_error_handler_should_panic`) needed no change -- current
+liballoc's source calls neither at all, confirmed by reading
+`library/alloc/src/alloc.rs` directly rather than assuming symmetry with the
+two functions that do.
+
+**A fourth, unrelated bug the other three's fixes exposed by getting the
+build further: `rust-lld` on this nightly needs a shared `libLLVM.dylib`
+nothing was pointing it at.** `otool -l` on the pinned nightly's `rust-lld`
+shows `LC_RPATH @loader_path/../lib`, which resolves to
+`lib/rustlib/<triple>/lib` -- a directory that does not exist; the real file
+is one level higher, at the toolchain root's own `lib/`. `rustc` sets up the
+dynamic loader's search path itself before running `rust-lld` as its own
+linker subprocess; both places that invoke `rust-lld` DIRECTLY, bypassing
+`rustc` (`bin/build-units`' reader-module link, and `src/flint/link.cljc`'s
+`sh!`, the compiler's own final link of every module it produces), do not,
+and failed at process start with `Library not loaded: @rpath/libLLVM.dylib`
+on macOS. Fixed in both: `bin/build-units` exports `DYLD_LIBRARY_PATH`/
+`LD_LIBRARY_PATH` with the toolchain's `lib/` prepended before its direct
+`rust-lld` call, and `src/flint/link.cljc` gained `lld-env` (same
+computation) and an `sh!` that takes an optional env map, merged over the
+JVM's own inherited environment rather than replacing it -- `Runtime.exec`'s
+`envp` form replaces the whole environment, and a `rust-lld` missing `PATH`
+or anything else it reads would be a second bug wearing the first one's
+error message.
+
+**Why this is recorded as four bugs and not one.** Each was reached only by
+fixing the one before it -- the metadata-stub error never appeared until the
+alloc-shim symbol was already resolved, and the dylib error never appeared
+until the metadata-stub fix let the link step run at all. A bisection or a
+single reproduction would have named only the first; `rm -rf
+target/wasm32-unknown-unknown units` before every retry (`AGENTS.md`'s
+rebuild-order discipline, applied to the unit build itself) is what kept
+each fix's verification honest rather than re-running against a tree that
+still had the previous failure's partial output sitting in it.
+
+**Linux is unverified by this box.** Nothing here is believed to be
+platform-specific (the dylib issue is a macOS linking convention, but the
+fix -- setting both `DYLD_LIBRARY_PATH` and `LD_LIBRARY_PATH` -- costs
+nothing if Linux's nightly turns out to link LLVM statically and need
+neither), but "nothing here is believed to be" is a claim about reasoning,
+not a measurement, and AGENTS.md §3 is explicit that the two are not the
+same thing. The dispatched CI run on this branch is where that gets
+checked.
 
 ---
 
@@ -17712,10 +17831,11 @@ reran `bb test/door-agreement.clj`: clean.
 
 **Ratified:** ☐ not signed off
 
-**Status: built 2026-10-07.** `bin/bb-version` (currently `1.3.190`) is read
-by `.github/workflows/test.yml`, `binaries.yml` and `publish.yml` to pin
-`DeLaGuardo/setup-clojure@13`'s `bb:` input, instead of the rolling `latest`
-alias.
+**Status: built 2026-10-07, re-pinned AND the generator fixed 2026-10-08
+(see "Decoupled from the executing bb, and re-pinned to v1.13.225" below).**
+`bin/bb-version` (currently `1.13.225`) is read by `.github/workflows/test.yml`,
+`binaries.yml` and `publish.yml` to pin `DeLaGuardo/setup-clojure@13`'s `bb:`
+input, instead of the rolling `latest` alias.
 
 ### What was decided
 
@@ -17802,6 +17922,70 @@ pinning stops the version from moving unannounced, it does not make the
 generator version-independent. Bumping `bin/bb-version` in the future needs
 `bb test/manifest.clj` run on the bumped version before the bump lands, the
 same discipline a nightly bump already needs.
+
+### Decoupled from the executing bb, and re-pinned to v1.13.225, 2026-10-08
+
+**Built 2026-10-08.** `bin/manifest`'s `clojure-publics` no longer
+reads `clojure.core` off the babashka interpreter executing the script, for
+ANY babashka version -- it reads `bin/clojure-core-publics.edn` (new), a
+679-name snapshot taken once from a real JVM Clojure 1.12.1
+(`clojure -M -e '(->> (ns-publics (quote clojure.core)) keys (map name) sort
+(run! println))'`). `bin/bb-version` moves to `v1.13.225`, the current
+release (and, by coincidence of timing, the exact version this decision's
+own reproduction container already used).
+
+**This closes the "Risk left open" above by the preferred route the
+assignment offered, not the fallback.** The alternative was pinning
+`v1.3.190` forever and re-verifying by hand on every future bump; instead
+`bin/manifest` stopped depending on the executing interpreter's own
+`clojure.core` at all, which was always the "full fix" this section already
+named and deferred ("out of scope for closing this gate's red"). It turned
+out to be cheap: one `clojure -M -e` invocation (`clojure`/a JVM were already
+on hand) plus deleting the `babashka-blind-spot` set rather than extending
+it.
+
+**Verification, run both directions.** `bb bin/manifest` (babashka
+`v1.3.190`, the box's existing install) and a separately-downloaded babashka
+`v1.13.225` binary were run back to back against the same tree, each
+producing byte-identical `doc/manifest.edn`, `README.md` and
+`doc/coverage.md` -- confirmed with `diff`, not by reading the code and
+expecting it. Before this fix, the same two-version comparison reproduced
+exactly the four-symbol diff this decision's "What was decided" section
+already recorded (`-locking-impl`, `req!`, `some-vals` gained;
+`binding-conveyor-fn` lost) -- so the bug this fixes is the real one, not a
+different one that happens to also be babashka-version-shaped.
+
+**A second, larger contamination the four-symbol diff was the visible edge
+of.** Regenerating `doc/manifest.edn` with the new baseline did not just
+remove those four names from `clojure.core`'s `:absent` list -- it removed
+EIGHTEEN, all of them babashka's own sci-internal helpers that the OLD
+mechanism (babashka's `ns-publics` on itself, patched by the hardcoded
+`babashka-blind-spot` SET-UNION) had been reporting as real-Clojure names
+flint lacks, for as long as this script existed and not only since the last
+bump -- confirmed by listing every line `git diff doc/manifest.edn` removed,
+not estimated: `-add-loaded-lib`, `-new-dynamic-var`, `-new-var`,
+`-reified-methods`, `-run-in-transaction`, `-with-precision`,
+`binding-conveyor-fn` (the one already named above, also part of this
+larger set), `get-thread-binding-frame-impl`, `global-hierarchy`,
+`has-root-impl`, `multi-fn-add-method-impl`, `multi-fn-impl`,
+`multi-fn?-impl`, `protocol-type-impl`, `proxy*`, `reify*`,
+`reset-thread-binding-frame-impl`, `system-time`. `:absent`
+drops from 376 to 358 names; `:present`, `:extra` and every other namespace's
+counts are unchanged (confirmed with `diff` against the pre-fix committed
+file, not asserted). None of those eighteen is a name real Clojure 1.12.1
+publishes -- a UNION can only ever grow the set it patches, so a blind-spot
+list aimed at babashka's OMISSIONS could never have caught babashka's own
+ADDITIONS, on any version, including the one already committed.
+
+**Why this was the cheap fix and not a larger one.** `bin/manifest` compares
+seven real-Clojure namespaces (`compared-with`); only `clojure.core` had a
+hand-maintained patch set, and a direct `bb bin/manifest` run under both
+babashka versions showed the other six produce byte-identical output
+regardless of babashka version -- so only `clojure.core` needed decoupling,
+not a rewrite of `clojure-publics` for every namespace. `letfn*`
+(`clojure-special-forms`) stays merged in regardless of baseline source: it
+is a special form in flint, never a var even in real Clojure's own
+`ns-publics`.
 
 ---
 

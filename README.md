@@ -1217,7 +1217,7 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 322 | 46 | 376 | 0 |
+| `clojure.core` | 322 | 46 | 358 | 0 |
 | `clojure.core.protocols` | 4 | 0 | n/a | n/a |
 | `clojure.data` | 5 | 0 | n/a | n/a |
 | `clojure.datafy` | 2 | 0 | n/a | n/a |
@@ -1260,7 +1260,7 @@ hierarchies (`derive`, `isa?`, `parents`, `prefer-method`);
 transducers (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity transducer forms of `map`/`filter`/`take`/...);
 and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
 
-*Absent:* 376 names -- see `doc/manifest.edn` for all of them.
+*Absent:* 358 names -- see `doc/manifest.edn` for all of them.
 
 #### `clojure.edn`
 

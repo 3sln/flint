@@ -11,9 +11,10 @@ cd "$(dirname "$0")/.."
 # an unpinned nightly fetched the day it runs, and a nightly between
 # 2026-06-01 and 2026-09-01 changed where a build-script-bearing dependency's
 # own rlib lands under `--target wasm32-unknown-unknown` (into its OWN
-# `build/<crate>/<hash>/out/`, not `release/deps/`) -- `rlib()` below only
-# looks in `deps/`, so `--extern libm=` resolved empty and `flint.rt`'s direct
-# rustc call failed `error: extern location for libm does not exist`.
+# `build/<crate>/<hash>/out/`, not `release/deps/`). `rlib()` below no longer
+# assumes `deps/` -- see the cargo build below, which reads cargo's own
+# `--message-format=json` artifact list and copies whatever it finds into
+# `$DEPS`, wherever cargo actually put it (`bin/cargo-artifacts.py`).
 NIGHTLY="$(cat "$(dirname "$0")/nightly-toolchain")"
 RUSTC="$(rustup which --toolchain "$NIGHTLY" rustc 2>/dev/null)" || RUSTC=""
 if [ -z "$RUSTC" ]; then
@@ -98,23 +99,52 @@ echo "  dependencies (cargo, once)"
 # `set -e` ended the script, and `bin/build-dist` printed "==> production units"
 # and stopped -- with dist/ still holding yesterday's artifacts, looking current.
 # A build step that can fail has to be able to say why.
+# `--message-format=json-render-diagnostics`, not a plain log: the artifact
+# list below is what makes `rlib()` independent of where cargo decides to put
+# an rlib, and the rendered text in each `compiler-message` is what a real
+# error looks like regardless of how many warnings sort after it (the CI
+# incident this decision records: 52 warnings, then the real `error[...]`
+# scrolled off a plain `tail -20`).
 if ! PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown \
        --workspace --exclude flint-cli --exclude flint --exclude flint-c \
        --exclude flint-native-abi \
-       > /tmp/flint-units-cargo.log 2>&1; then
+       --message-format=json-render-diagnostics \
+       > /tmp/flint-units-cargo.json 2>/tmp/flint-units-cargo.stderr; then
   echo "  the dependency build FAILED:"
-  sed 's/^/    /' /tmp/flint-units-cargo.log | tail -30
+  python3 bin/cargo-artifacts.py diagnostics /tmp/flint-units-cargo.json | tail -60
+  sed 's/^/    /' /tmp/flint-units-cargo.stderr | tail -30
   exit 1
 fi
+# Copy every rlib cargo reported, wherever it actually put it, into $DEPS --
+# so `rlib()` below (and `bin/build-test-unit`'s own `-L $DEPS`) see it under
+# the one directory both already searched by convention, instead of each
+# needing to know cargo's current layout (DECISIONS.md#pin-the-nightly-toolchain,
+# "Risk left open").
+mkdir -p "$DEPS"
+python3 bin/cargo-artifacts.py rlibs /tmp/flint-units-cargo.json "$DEPS"
 
 rlib() { ls "$DEPS"/lib$1-*.rlib 2>/dev/null | head -1; }
+# `--extern NAME=<path>` wants THIS, not `rlib()`, for a build-script-bearing
+# dependency on this nightly: cargo now writes its `.rlib` as a METADATA STUB
+# (real compiled object code, but a placeholder metadata section) and the
+# FULL metadata only into the sibling `.rmeta` cargo-artifacts.py copied
+# alongside it -- confirmed by rustc's own error without this, "only metadata
+# stub found for `rlib` dependency `libm` please provide path to the
+# corresponding .rmeta file with full metadata". `rlib()` itself still has to
+# return the real `.rlib`: that is what the final link step needs (rust-lld
+# reads compiled object code, not rustc's metadata format, so a stub there is
+# fine), and what gets copied into a unit's `.libs/` below.
+metalib() {
+  m=$(ls "$DEPS"/lib$1-*.rmeta 2>/dev/null | head -1)
+  if [ -n "$m" ]; then echo "$m"; else rlib "$1"; fi
+}
 
 # Units are laid out by NAMESPACE, the way :src lays out source, so that
 # `units/` is just the default entry on the :wasm-path search path rather than a
 # second mechanism:  flint.data.json -> <dir>/flint/data/json.{unit.edn,o,libs/}
 echo "  flint.rt"
 mkdir -p units/flint
-LIBM=$(rlib libm)
+LIBM=$(metalib libm)
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
   --emit=obj runtime/src/lib.rs -o units/flint/rt.o
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
@@ -140,7 +170,7 @@ build_parser() {          # name path crate_dir crate_name symbol clj_name deps.
   rm -f "$base.libs"/*.rlib
   EXTERNS="--extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS"
   for d in "$@"; do
-    r=$(rlib "$d")
+    r=$(metalib "$d")
     if [ -n "$r" ]; then EXTERNS="$EXTERNS --extern $d=$r"; fi
   done
   # Every rlib the unit or its dependencies need lives beside the unit, so the
@@ -207,7 +237,11 @@ build_parser flint.data.html flint/data/html units-src/flint-data-html flint_dat
 
 cp "$SYS"/libcore-*.rlib "$SYS"/liballoc-*.rlib "$SYS"/libcompiler_builtins-*.rlib \
    "$SYS"/librustc_std_workspace_core-*.rlib units/.sysroot/ 2>/dev/null || true
-cp "$LIBM" units/.sysroot/ 2>/dev/null || true
+# The REAL `.rlib` (`rlib()`, not `metalib()`): this is what `flint.link`'s
+# own final link step needs (real compiled object code), not metadata --
+# copying the metadata-only `.rmeta` here left `trunc`/`cos`/`sin`/... all
+# undefined at that later link, found building `dist/flint-loader.wasm`.
+cp "$(rlib libm)" units/.sysroot/ 2>/dev/null || true
 
 # THE READER MODULE (`DECISIONS.md#namespaces-over-the-system-port`): the kin
 # reader and forms encoder alone, for a JavaScript host that has to read source
@@ -224,6 +258,15 @@ if [ -z "$DIAG" ] && [ -z "$AOT" ]; then
     --emit=obj units-src/flint-reader/src/lib.rs -o units/.reader/reader.o
   LLD=$(ls "$TC"/lib/rustlib/*/bin/rust-lld 2>/dev/null | head -1)
   if [ -z "$LLD" ]; then echo "no rust-lld under $TC/lib/rustlib"; exit 1; fi
+  # This pinned nightly's `rust-lld` dynamically links against a shared
+  # `libLLVM.dylib`/`.so` at the TOOLCHAIN ROOT's own `lib/` -- its `LC_RPATH`
+  # (`@loader_path/../lib`) resolves to `lib/rustlib/<triple>/lib`, which does
+  # not exist. `rustc` sets this up itself before running `rust-lld` as its
+  # own linker subprocess; a direct call, as this always was, needs it set by
+  # hand (`src/flint/link.cljc`'s `lld-env` needed the identical fix for the
+  # compiler's own direct `rust-lld` call).
+  export DYLD_LIBRARY_PATH="$TC/lib:${DYLD_LIBRARY_PATH:-}"
+  export LD_LIBRARY_PATH="$TC/lib:${LD_LIBRARY_PATH:-}"
   # The same stack placement every flint module gets (`flint.link/link-objects`
   # says why: an overflow must trap at address zero, not scribble the statics).
   "$LLD" -flavor wasm --no-entry --gc-sections --strip-all \

@@ -181,6 +181,16 @@ mod global_alloc {
     static A: FlintAlloc = FlintAlloc;
 }
 
+// `alloc::alloc::alloc`/`alloc_zeroed` (what `Vec`, `Box` etc. in this
+// `no_std` crate ultimately call) now tail-call `__rust_no_alloc_shim_is_unstable_v2`
+// before `__rust_alloc`, unconditionally, as of rust-lang/rust#141061 --
+// "make sure we don't accidentally allow omitting the allocator shim in
+// stable code until it is actually stabilized." See `alloc_shim` in `lib.rs`,
+// which now defines it alongside the other shim symbols this crate has
+// always had to provide by hand for the same reason
+// (DECISIONS.md#pin-the-nightly-toolchain: "whether to add it" was left
+// undecided when a 2026-06-01 nightly first expected it -- now decided).
+
 // ---------------------------------------------------------------------------
 // Host: reserve address space, commit it on demand (`DECISIONS.md#growable-heap`).
 // Three calls, so the platform is three functions and nothing else touches it.
