@@ -40,10 +40,11 @@
 ;; selftest gives: a test against the source passes with the bundle broken.
 (spit "out/capdriver.mjs"
       (str "import { readFile } from 'node:fs/promises';\n"
-           "import { Compiler } from '../sdks/esm/dist/flint.js';\n"
+           "import { Compiler, chain, fromMap } from '../sdks/esm/dist/flint.js';\n"
+           "import { stdextra } from '../sdks/esm/dist/stdextra.js';\n"
            "const src = await readFile('test/capability.cljc', 'utf8');\n"
-           "const image = (await Compiler.load()).compile({\n"
-           "  files: { 'capability.cljc': src }, fn: 'capability/main',\n"
+           "const image = await (await Compiler.load()).compile({\n"
+           "  resolve: chain(stdextra(), fromMap({ 'capability.cljc': src })), fn: 'capability/main',\n"
            "  exports: ['capability/main', 'capability/granted'] });\n"
            ;; THE HOST, implementing the pattern. One grant, id 5 -- arbitrary
            ;; and the host's own business; a guest can carry it and compare it

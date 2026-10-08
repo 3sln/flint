@@ -30,32 +30,36 @@ fi
 mkdir -p dist
 
 echo "==> the compiler, the runtimes and their slot maps"
-for f in flintc.wasm flint-runtime.wasm flint-runtime-aot.wasm slots.json slots-aot.json; do
+for f in flintc.wasm flint-runtime.wasm flint-runtime-aot.wasm slots.json slots-aot.json \
+         flint-reader.wasm; do
   cp "$root/dist/$f" "dist/$f"
   printf '    %-24s %s\n' "$f" "$(wc -c < "dist/$f" | tr -d ' ') bytes"
 done
 
-echo "==> the standard library, as data"
-# As one JSON file rather than as a tree of `.cljc`: the CLI reads it into a map
-# to build the spec, and a tree would be a second walk producing the same map
-# with more ways to go wrong.
-cp "$root/lib/deps.edn" dist/lib-deps.edn
-# `flint.deps`'s OWN workspace, separate from the one above
-# (`DECISIONS.md#flint-deps-is-its-own-workspace`). This is the THIRD DOOR
-# (`AGENTS.md` "one fact, four front doors"): its own copy, which nothing in
-# `bin/build-dist` or `cargo build` touches.
-cp "$root/lib/flint/deps/deps.edn" dist/flint-deps-deps.edn
-node "$root/sdks/esm/stdlib-walk.mjs" "$root/lib" dist/stdlib.json
+echo "==> the standard library, read, in its two layers"
+# `bin/build-stdlib-forms`' blobs, COPIED: stdcore, which this CLI answers before
+# its resolver is asked anything, and stdextra, which its resolver consults
+# first (`DECISIONS.md#namespaces-over-the-system-port` §4). Each answer already
+# carries the workspace and grants of the `deps.edn` that owns its file, so there
+# is no `deps.edn` to copy and no prefix table to rebuild here.
+for f in stdcore.forms stdextra.forms; do
+  cp "$root/dist/$f" "dist/$f"
+  printf '    %-24s %s\n' "$f" "$(wc -c < "dist/$f" | tr -d ' ')"
+done
+rm -f dist/stdlib.json dist/lib-deps.edn dist/flint-deps-deps.edn
 
 echo "==> the guest driver"
 # COPIED, not reimplemented. `sdks/esm/src/guest.js` is the reference driver --
-# arguments, the pump, capabilities -- and `sdks/esm/src/codec.js` is the wire
-# codec. Both are portable (no `node:` import, no `process`, no filesystem), so
+# arguments, the pump, capabilities -- `sdks/esm/src/codec.js` is the wire
+# codec, and `sdks/esm/src/resolve.js` the compile call. All three are portable (no `node:` import, no `process`, no filesystem), so
 # the CLI is a third caller of them rather than a second implementation. A
 # published package cannot reach across to a sibling package's source, which is
 # the only reason these are copies and not imports.
 cp "$root/sdks/esm/src/guest.js" dist/guest.js
 cp "$root/sdks/esm/src/codec.js" dist/codec.js
+# The compile call and the resolver building blocks: the same file the ESM SDK
+# drives the compiler with, so the two JavaScript doors speak the protocol once.
+cp "$root/sdks/esm/src/resolve.js" dist/resolve.js
 
 echo "==> checking the served catalogue still matches cli/src/sys.rs"
 (cd "$root" && ./bin/check-sys-catalogue) | sed 's/^/    /'

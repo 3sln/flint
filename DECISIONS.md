@@ -14970,7 +14970,9 @@ modes of `main` still serve every door. What proves it, and how:
   four fewer. The port adapter uses only `flint.port/send`/`receive`, nothing
   the call loop's `var-named` restriction touches.
 Step 1's first sub-step (the kin reader and encoder) is built -- see §8
-step 1 for what proves it; the rest of step 1 and steps 3 to 8 are not. The rest of this section was
+step 1 for what proves it. **Step 4, the JavaScript doors, is built** (branch
+`js-doors`, 2026-10-07) -- see §8 step 4 for what proves it. The rest of step 1,
+step 3's compile-call half and steps 5 to 8 are not. The rest of this section was
 written against `6d8ea376` and assumes the `flint-seal` work
 has landed first: the system thread gets the system port as `boot`'s argument,
 `flint.rt/system-port` is gone, the runtime answers the host's snapshot
@@ -16174,9 +16176,12 @@ sizes are estimates from reading the code, not measurements.
    that fail fail with the same message -- on native, on the JVM and on the
    CLR. The guard was made to fail on purpose: one tag byte changed in the
    generated Rust encoder turned all three reads of `test/reader/tricky.cljc`
-   red. NOT yet shown on wasm: the wasm runtime compiles the same Rust, but no
-   export reaches `read_forms` until the ESM door reads (step 2), so wasm is
-   claimed by construction only. `test/reader_test.clj` still runs on
+   red. *Shown on wasm 2026-10-07* (branch `js-doors`, step 4):
+   `bin/check-reader` gained a row reading the same 489 references through
+   `dist/flint-reader.wasm`, one module instance for every read --
+   489 compared, 59 failed alike, 0 differ, the same run as the other three
+   rows. (Until then this said wasm was claimed by construction only, which
+   was true: no export reached `read_forms`.) `test/reader_test.clj` still runs on
    `reader.cljc` (it is babashka, which cannot call a generated reader).
 
    *Open, found building it:* an AUTO-GENSYM (`x#`) is not a function of the
@@ -16249,6 +16254,120 @@ sizes are estimates from reading the code, not measurements.
    `FLINT_DIST_FRESH=1 sdks/cli/build` first, `bb test/door-agreement.clj`,
    and the §4 stdcore-override probe.
    Medium-large: about 300 JS lines.
+
+   **BUILT 2026-10-07** (branch `js-doors`). Both JavaScript doors compile
+   through `flint.selfhost/compile` with a resolver port they mint and answer,
+   through ONE shared driver, `sdks/esm/src/resolve.js` (the npm CLI copies it
+   into its `dist/` beside `guest.js` and `codec.js`, which it already copied).
+   What was built, and the choices made:
+
+   * **The reader lives in its own module, `dist/flint-reader.wasm`**, not as
+     an export of `flint-runtime.wasm`. *Measured*: 452 987 bytes (`wc -c` of
+     the `--strip-all` rust-lld output). Relinked without stripping and summing
+     function-body sizes from the name section, the code whose names are the
+     reader's own (`kgen::rt::read*`, `formsenc`, `hostread`, the module's
+     exports, the input decoder) is 130 819 bytes in 95 functions; the rest is
+     the runtime the reader stands on (the heap, the collector, the
+     interpreter loop that forces a lazy seq). Exporting it from
+     `flint-runtime.wasm` instead (858 524 bytes) would have added roughly that
+     130 KB to the module EVERY compiled program is spliced into, to serve only
+     the host. Separate, it is paid once, by the SDK. It is built by
+     `bin/build-units` from `units-src/flint-reader` (four exports: an input
+     buffer, `flint_reader_read`, and the output's address and length) and
+     frozen into `dist/` by `bin/build-dist`.
+   * **One host read, shared.** The feature-set and tag-map construction that
+     was `cli/src/read.rs` moved into the runtime crate as
+     `flint_rt::hostread::read_text`; the native CLI and the reader module both
+     call it, so neither can build a set in another order.
+     `bin/check-reader` gained a wasm row (`test/wasm-reader.mjs`), which reads
+     every reference file through ONE module instance, as a host does.
+   * **stdcore and stdextra are built once, by `bin/build-stdlib-forms`** (run
+     by `bin/build-dist`), into `dist/stdcore.forms` and `dist/stdextra.forms`:
+     each a wire map of namespace path to the COMPLETE pre-encoded answer
+     (`:file`, deferred `:forms`, `:dialect`, and the workspace, tags, prelude,
+     grants and guard of the `deps.edn` owning the file). **Which namespaces are
+     stdcore is asked of the compiler**: it compiles a program that requires
+     nothing, `:target :image`, under `[perf]`'s features (no `:flint/check`),
+     answering from all of `lib/`, and takes what was asked minus the probe.
+     *Measured at this branch*: 8 namespaces, 142 676 bytes -- `clojure.core`,
+     `clojure.string`, `flint.core`, `flint.nfa`, `flint.port`,
+     `flint.protocols`, `flint.regex`, `flint.wire`, exactly the eight the
+     survey above predicted -- and 27 in stdextra, 210 967 bytes. So the "28 of
+     36 / 26 of 34" counts above read 27 of 35 at this tree, by this method.
+   * **ESM SDK**: `Compiler#compile` is async with no synchronous twin; new
+     `Compiler#emit` for `:llvm`/`:clr`/`:jvm`; the building blocks `chain`,
+     `fromMap`, `segregate`, `virtualNamespaces`; `stdextra()` in its own entry,
+     `@3sln/flint/stdextra`, a separate bundle (`dist/stdextra.js`) that imports
+     the core, so a host that never imports it never loads the blob -- checked
+     by the selftest, which finds an aligned slice of `stdextra.forms`' base64 in
+     `stdextra.js` and not in `flint.js`, and stdcore's in `flint.js`. A bare
+     string answer is portable source; text is read in the SDK under the
+     compile's features and the answer's tags and dialect. `fromMap` tries
+     `.fln`, `.cljc`, `.clj` in that order.
+   * **npm CLI**: `chain(stdextra, the host catalogue, roots..)`, each project
+     answer carrying its root's `deps.edn` workspace. **Strict priority, not the
+     `segregate` the CLI sketch above writes**: segregating `flint.` would make
+     every project `flint.*` namespace missing, the compiler's own source among
+     them, which the native CLI compiles. Priority is the other contract this
+     section allows, and rule 2 is what makes it safe. `flint.ception` compiles
+     its `:sources` from memory, answered as portable text, rather than spilling
+     them to files with a made-up `.cljc` name; the native CLI's spill now
+     spells the extension from the dialect (`extension_of`), and `ns_to_path`,
+     which appended `.cljc` for the resolver to trim back off, is gone in favour
+     of `script::ns_key`.
+   * **Deleted**: `collectSources` and its require REGEX, the path-prefix
+     workspace table and `ednWorkspaces`, the EDN spec text in both JS doors
+     (`sdks/cli/src/spec.mjs`'s `buildSpec`; what was left is `script.mjs`),
+     `standardLibrary()`, `sdks/esm/stdlib-walk.mjs` and the text
+     `stdlib.json`, and `bin/check-lib-grants` -- it compared `lib/deps.edn`'s
+     grants with a second declaration in `flint.js` that no longer exists; both
+     JS doors now read `lib/deps.edn` itself, at build time.
+
+   *Found doing it:* **checks make stdextra required.** Checks are on by
+   default, which makes `flint.check` a root of every compile
+   (`project-roots`), and `flint.check` is stdextra -- so a host that omits
+   `stdextra()` gets "no source for flint.check" for any program unless it
+   compiles with `checks: false`. The SDK now says so in the error. "A not-found
+   answer is not an error in itself" (§1, "Roots") is the unbuilt OPTIONAL-root
+   design; whether `flint.check` should be stdcore when checks are on, or an
+   optional root, is open for the maintainer.
+
+   *Found doing it:* **the two CLIs now resolve a shadowing project
+   differently**, until the native CLI moves to the call (step 3). The native
+   EDN path still lets a project file at a library path replace it, and still
+   grants a project file under `flint/` the library's workspace (the prefix
+   hole); the npm CLI does neither. No byte-identity row sees it, because no
+   fixture shadows a library name. Recorded in `doc/api-review.md`'s
+   `sdks/cli` section.
+
+   *What proves it* (all 2026-10-07 at this branch, at load averages 25-75 from
+   unrelated work, so the times are not measurements of anything):
+   * `test/door-agreement.clj`, with the ESM SDK added as a fourth door
+     (`test/esm-door.mjs`, the shipped bundle with `chain(stdextra(),
+     fromMap(files))`): `:to :clr` under three basenames and `:to :clr`/`:jvm`/
+     `:llvm` plain and `:optimize [perf]`, bb, native, npm and ESM byte-identical;
+     and a new corpus sweep, every top-level `corpus/*.cljc` as `:to :wasm`,
+     plain and `[perf]`, through native, npm and ESM: **42 of 42 byte-identical,
+     and `caesar`/`dijkstra` refused by all three in both modes** -- the native
+     arm still on its EDN spec, so this is the call against the old path, not
+     against itself. 45.5 min, which is why the sweep defaults to `nbody` and
+     `FLINT_DOORS_CORPUS=all` runs it whole.
+   * `node sdks/cli/selftest.mjs` (via `FLINT_DIST_FRESH=1 sdks/cli/build`): all
+     good, including the five native byte-identity rows, `:to :clr` and
+     `:to :jvm`. Its first run failed one row -- a nested `flint.ception`
+     program could not reach `flint.sys.env`, because the in-memory resolver
+     chained stdextra and forgot the host catalogue; fixed by giving both
+     source kinds the same chain.
+   * `node sdks/esm/selftest.mjs`: 81 ok, 0 failed. Among them the §4 probes:
+     a resolver answering `clojure.core` and `flint.port` with hostile source is
+     never CALLED for them (calls recorded) and the program's `str` is the real
+     one, while the SAME resolver's `clojure.set` answer does take effect (the
+     control); a resolver answering every wave with a promise compiles; `.fln`
+     wins over `.cljc` for one namespace, with a `.cljc`-only control; a file
+     at `flint/evil.cljc` reaching `flint.host/ask` is refused unless its answer
+     carries the grant; a throwing resolver, and an answer declaring the wrong
+     namespace, reject rather than hang.
+   * `bin/check-reader`'s new wasm row (step 1.1 above): 489 reads, 0 differ.
 5. **Rust SDK, C API, JVM and CLR `Compiler`.** These carry the new resolver
    signatures, and the C ABI changes. Update `doc/api-review.md` for each
    surface (AGENTS.md §9). *Gate:* `sdks/c/selftest`, the Rust SDK tests,

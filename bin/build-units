@@ -200,4 +200,30 @@ cp "$SYS"/libcore-*.rlib "$SYS"/liballoc-*.rlib "$SYS"/libcompiler_builtins-*.rl
    "$SYS"/librustc_std_workspace_core-*.rlib units/.sysroot/ 2>/dev/null || true
 cp "$LIBM" units/.sysroot/ 2>/dev/null || true
 
+# THE READER MODULE (`DECISIONS.md#namespaces-over-the-system-port`): the kin
+# reader and forms encoder alone, for a JavaScript host that has to read source
+# outside the compiler sandbox. Not a unit -- no manifest, no builtin, linked
+# into no program -- so it is linked HERE, by rust-lld directly, into
+# `units/.reader/flint-reader.wasm`, which `bin/build-dist` copies to `dist/`.
+# Production builds only: a diagnostics or AOT runtime is a different reader
+# module, and `dist/` carries one.
+if [ -z "$DIAG" ] && [ -z "$AOT" ]; then
+  echo "  flint-reader.wasm"
+  mkdir -p units/.reader
+  $RUSTC $FLAGS --crate-type rlib --crate-name flint_reader \
+    --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
+    --emit=obj units-src/flint-reader/src/lib.rs -o units/.reader/reader.o
+  LLD=$(ls "$TC"/lib/rustlib/*/bin/rust-lld 2>/dev/null | head -1)
+  if [ -z "$LLD" ]; then echo "no rust-lld under $TC/lib/rustlib"; exit 1; fi
+  # The same stack placement every flint module gets (`flint.link/link-objects`
+  # says why: an overflow must trap at address zero, not scribble the statics).
+  "$LLD" -flavor wasm --no-entry --gc-sections --strip-all \
+    -z stack-size=1048576 --stack-first \
+    --export=flint_reader_in --export=flint_reader_read \
+    --export=flint_reader_out_ptr --export=flint_reader_out_len \
+    -o units/.reader/flint-reader.wasm \
+    units/.reader/reader.o units/flint/rt.o units/.sysroot/*.rlib \
+    > units/.reader/link.log 2>&1 || { sed 's/^/    /' units/.reader/link.log | grep -v 'neither Wasm object' | tail -30; exit 1; }
+fi
+
 find units -name "*.unit.edn" | sed 's/^/  /'

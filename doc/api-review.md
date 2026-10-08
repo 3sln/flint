@@ -724,8 +724,9 @@ this review, so there is nothing left for the reviewer to weigh here.
 
 **Reviewed:** ☐ not signed off
 
-The portable ESM SDK, published as `@3sln/flint`. `package.json` exports ONE
-entry, `./dist/flint.js`, so the surface is exactly what that bundle re-exports.
+The portable ESM SDK, published as `@3sln/flint`. `package.json` exports TWO
+entries since 2026-10-07 -- `./dist/flint.js` and `./stdextra` (`./dist/stdextra.js`)
+-- so the surface is exactly what those two bundles export.
 
 **ENUMERATED 2026-09-26 at `44402457`** from the bundle's own export statement,
 fourteen names:
@@ -733,6 +734,9 @@ fourteen names:
     Compiler  Driver  Image  Inline  Sandbox  ThreadPool
     aotRuntimeSlots  artifacts  capabilities  codec  evaluate
     loaderBuiltins  runtimeSlots  standardLibrary
+
+(2026-10-07: `standardLibrary` is gone and nine names were added; see the
+CHANGED paragraph below.)
 
 **`instantiate` IS NOT ONE OF THEM**, and this section named it first. It is
 exported from `src/guest.js`, which `package.json` does not expose, and used
@@ -758,6 +762,31 @@ same day, while the call loop re-implemented the wire codec in builtins
 instead of calling `flint.port/send`/`flint.wire/read-from` -- corrected before
 this review, so there is nothing left for the reviewer to weigh here.
 
+**CHANGED 2026-10-07, not reviewed** (`DECISIONS.md#namespaces-over-the-system-port`,
+branch `js-doors`): the compile is a CALL with namespaces answered over a port,
+and the surface moved with it.
+
+* `Compiler#compile` is **asynchronous** (`Promise<Image>`), with no synchronous
+  twin -- decided by the maintainer. `evaluate` awaits it.
+* **New: `Compiler#emit({.., target})`**, the artifact for `'wasm'`, `'llvm'`,
+  `'clr'` (option `name`, the output's basename) or `'jvm'` (option
+  `className`), as bytes -- the request the CLIs send for `:to <target>`, which
+  is what lets `test/door-agreement.clj` hold this SDK to them.
+* **Gone: `files`, `workspaces` (path prefixes), `standardLibrary()`**, and the
+  EDN spec under them. Sources come only from `resolve: (ns) => answer |
+  Promise<answer>`; workspace, grants, guard, tags, prelude and dialect are
+  fields OF AN ANSWER. New options `checks` (as on the CLIs: `[perf]` drops
+  checks unless told otherwise) and `features`.
+* **New building blocks**, re-exported from `./dist/flint.js`: `chain`,
+  `fromMap`, `segregate`, `virtualNamespaces`, `Reader`, `layer`, `nsPath`,
+  `SOURCE_EXTENSIONS`, and `stdcoreNamespaces()`.
+* **A second entry, `@3sln/flint/stdextra`** (`./dist/stdextra.js`), exporting
+  `stdextra()`: the optional half of the standard library, in its own file so
+  a program that never imports it never loads it. stdcore is inside the core
+  and is answered before `resolve` is asked anything.
+* The bundle embeds `dist/flint-reader.wasm` (452 987 bytes) for reading user
+  text outside the compiler sandbox.
+
 **Change requests:**
 
 1. **`instantiate` was documented as the SDK's headline and is not exported.**
@@ -767,6 +796,23 @@ this review, so there is nothing left for the reviewer to weigh here.
    hand") — or settle that `Image`/`Sandbox` are the only intended doors. The
    reviewer's call; what is not tenable is the current state, where the document
    answers one way and `package.json` the other.
+
+2. **Which of the new building blocks are surface.** `layer` is exported
+   because `stdextra.js` builds its resolver with it and the bundle keeps that
+   import; `nsPath` and `Reader` are exported because a host writing its own
+   resolver needs the mapping and may want to read text itself. All three could
+   instead be internal (a private export name), leaving `chain`, `fromMap`,
+   `segregate`, `virtualNamespaces` and `stdextra()` as the composition surface
+   the decision names. `segregate` is exported and used by neither CLI, which
+   compose by strict priority instead (see `sdks/cli`).
+3. **A bare string answer means PORTABLE source.** A resolver answering
+   `"(ns x) .."` is read as `.cljc`; flint's own dialect needs `{source,
+   dialect: 'flint'}` or a `file` ending in `.fln`. Whether the default should be
+   portable or refuse an answer that does not say is the reviewer's call.
+4. **`emit` and its option names** (`name` for the CLR output basename,
+   `className` for the JVM class) were chosen to mirror the request's `:name`
+   and `:class`; the method itself could equally be a `target` option on
+   `compile` returning bytes for non-wasm targets.
 
 ## sdks/cli
 
@@ -788,7 +834,33 @@ same day, while the call loop re-implemented the wire codec in builtins
 instead of calling `flint.port/send`/`flint.wire/read-from` -- corrected before
 this review, so there is nothing left for the reviewer to weigh here.
 
-**Change requests:** _none recorded_
+**CHANGED 2026-10-07, not reviewed** (`DECISIONS.md#namespaces-over-the-system-port`,
+branch `js-doors`): every compile is the compile CALL, with namespaces answered
+by this process over a resolver port, through the SDK's own `resolve.js`
+(copied into `dist/` like `guest.js` and `codec.js`). The EDN spec builder
+(`src/spec.mjs`) is gone; what was left of it is `src/script.mjs`. `dist/` now
+carries `flint-reader.wasm`, `stdcore.forms` and `stdextra.forms` in place of
+`stdlib.json`, `lib-deps.edn` and `flint-deps-deps.edn`. `flint.ception`
+compiles its `:sources` from memory rather than spilling them to a temporary
+directory.
+
+**Change requests:**
+
+1. **The two CLIs now resolve a SHADOWING project differently.** The native CLI
+   still compiles through its EDN spec, where "a project file at a
+   standard-library path REPLACES it"; this one composes `chain(stdextra,
+   catalogue, roots..)` and the library wins. Equally, a project file under
+   `flint/` gets the library's `flint/flint` grants on the native CLI (the
+   path-prefix hole the decision records) and its own root's workspace here.
+   The byte-identity rows do not see either, because no fixture shadows a
+   library name. Resolved when the native CLI moves to the call (§8 step 3); until
+   then it is a divergence by construction, recorded rather than hidden.
+2. **Strict priority, not the decision's `segregate`.** §4 sketches the CLI as
+   `chain(segregate(["clojure." "flint."], ..), pods, dir(roots..))`. Segregation
+   would make every project `flint.*` namespace missing -- including the
+   compiler's own source, which the native CLI compiles -- so this CLI composes by
+   priority, the other contract §4 allows. Reviewer's call whether the sketch or
+   this is the CLI's intended policy.
 
 ---
 

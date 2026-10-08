@@ -15,16 +15,22 @@ root=../..
 echo "==> the wasm artifacts"
 (cd "$root" && ./bin/build-dist) | sed 's/^/    /'
 
-echo "==> the standard library, as data"
-# Embedded as JSON rather than as files: there is no filesystem to read them
-# from at run time.
-node "$root/sdks/esm/stdlib-walk.mjs" "$root/lib" gen/stdlib.json
-
 echo "==> bundling"
+# TWO FILES, and the split is the point. `dist/flint.js` is the SDK's core and
+# carries stdcore -- the namespaces every image needs -- inline; `dist/stdextra.js`
+# carries the optional half of the standard library and nothing else, importing
+# the core for its code. A program that never imports `@3sln/flint/stdextra`
+# never loads that blob, with no tree-shaking proof asked of anyone's bundler
+# (`DECISIONS.md#namespaces-over-the-system-port` §4).
 npx --yes esbuild src/flint.js \
   --bundle --format=esm --platform=neutral --target=es2020 \
   --outfile=dist/flint.js
-ls -l dist/flint.js | awk '{printf "    dist/flint.js %.1f MB\n", $5/1048576}'
+npx --yes esbuild src/stdextra.js \
+  --bundle --format=esm --platform=neutral --target=es2020 \
+  --external:./flint.js --outfile=dist/stdextra.js
+for f in flint.js stdextra.js; do
+  ls -l "dist/$f" | awk -v f="$f" '{printf "    dist/%s %.2f MB\n", f, $5/1048576}'
+done
 
 echo "==> checking it works, and that it depends on nothing"
 # NOT `node selftest.mjs | sed ...`, which is what this was: a pipeline's status
@@ -41,10 +47,12 @@ rm -f "$selftest_out"
 
 node -e '
 const fs = require("fs");
-const src = fs.readFileSync("dist/flint.js", "utf8");
+for (const file of ["dist/flint.js", "dist/stdextra.js"]) {
+const src = fs.readFileSync(file, "utf8");
 const bad = [/require\(/, /from\s*"node:/, /from\s*.node:/, /process\./, /__dirname/];
 for (const re of bad) {
-  if (re.test(src)) { console.error("    FAIL: the bundle references " + re); process.exit(1); }
+  if (re.test(src)) { console.error("    FAIL: " + file + " references " + re); process.exit(1); }
+}
 }
 console.log("    no node imports, no process, no filesystem");
 '

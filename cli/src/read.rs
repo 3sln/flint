@@ -13,8 +13,8 @@
 //! file in `lib/`, `src/`, `corpus/` and the fixtures reads byte-identically on
 //! the guest's reader and on this one.
 
+use flint_rt::hostread::{self, ReadAs as Shared};
 use flint_rt::rt::Rt;
-use flint_rt::value::{Value, NIL};
 
 /// How one file is read: the compile's FEATURES (`None` reads deferred, as the
 /// standard library is embedded), the workspace's tag map as `(tag, var)`
@@ -25,74 +25,18 @@ pub(crate) struct ReadAs<'a> {
     pub portable: bool,
 }
 
-/// A symbol or keyword NAME, `ns/name` or `name`, split at its first slash --
-/// except a lone `/`, which is a name.
-fn split_name(s: &str) -> (Option<&str>, &str) {
-    match s.find('/') {
-        Some(i) if i > 0 && i + 1 < s.len() => (Some(&s[..i]), &s[i + 1..]),
-        _ => (None, s),
-    }
-}
-
 /// `text`, read as the file `name`, as `flint.forms` bytes; or the message the
 /// read failed with, exactly as the guest's reader words it.
+///
+/// DELEGATES to `flint_rt::hostread::read_text`, which the JavaScript doors'
+/// reader module runs too: one construction of the feature set and tag map for
+/// every host, rather than one here and one there.
 pub(crate) fn read_forms(name: &str, text: &str, how: &ReadAs) -> Result<Vec<u8>, String> {
+    let feats: Option<Vec<&str>> = how.features.map(|fs| fs.iter().map(String::as_str).collect());
+    let tags: Vec<(&str, &str)> = how.tags.iter().map(|(t, v)| (t.as_str(), v.as_str())).collect();
+    let shared = Shared { features: feats.as_deref(), tags: &tags, portable: how.portable };
     let mut rt = Rt::new();
-    let base = rt.mark();
-    let src = rt.string(text);
-    let si = rt.push(src);
-    let file = rt.string(name);
-    let fi = rt.push(file);
-    let feats = match how.features {
-        None => NIL,
-        Some(fs) => {
-            // `(set [..])`: THROUGH A TRANSIENT, as the guest's `set` builds the
-            // feature set it compiles with, so the two encode in one order.
-            let e = rt.empty_set();
-            let t = rt.to_transient(e);
-            let ti = rt.push(t);
-            for f in fs {
-                let (ns, n) = split_name(f.trim_start_matches(':'));
-                let k = rt.keyword(ns, n);
-                let t2 = rt.transient_conj(rt.r(ti), k);
-                rt.set_r(ti, t2);
-            }
-            rt.to_persistent(rt.r(ti))
-        }
-    };
-    let fsi = rt.push(feats);
-    let tags = if how.tags.is_empty() {
-        NIL
-    } else {
-        // AN ARRAY MAP IN THE ORDER GIVEN, which is how the guest's EDN reader
-        // builds `:flint/tag-readers`; the compiler compares it with `=`.
-        let e = rt.empty_map();
-        let mi = rt.push(e);
-        for (tag, var) in how.tags {
-            let (tn, tm) = split_name(tag);
-            let k = rt.symbol(tn, tm);
-            let ki = rt.push(k);
-            let (vn, vm) = split_name(var);
-            let v = rt.symbol(vn, vm);
-            let m2 = rt.map_assoc(rt.r(mi), rt.r(ki), v);
-            rt.set_r(mi, m2);
-            rt.pop_to(ki);
-        }
-        rt.r(mi)
-    };
-    let tgi = rt.push(tags);
-    let out = rt.read_forms(rt.r(si), rt.r(fi), rt.r(fsi), rt.r(tgi), how.portable, 1);
-    let oi = rt.push(out);
-    let res = if rt.is_bytes(rt.r(oi)) {
-        Ok(rt.b_to_vec(rt.r(oi)))
-    } else if out.is_nil() {
-        Err(format!("the reader ran out of heap reading {name}"))
-    } else {
-        let m: Value = rt.vec_nth(rt.r(oi), 0, NIL);
-        Err(rt.value_text(m))
-    };
-    rt.pop_to(base);
-    res
+    hostread::read_text(&mut rt, name, text, &shared).map_err(|e| e.message)
 }
 
 /// The `(tag, var)` pairs of a `:flint/tag-readers` block's inner text, when it

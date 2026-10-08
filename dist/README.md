@@ -11,6 +11,8 @@ is publishing and attaches them there.
 | `flint-loader.wasm` | the runtime. Any image loads into it and runs. |
 | `flint-runtime.wasm` | what a compiled module is spliced into. |
 | `flint-runtime-aot.wasm` | the same, carrying the compiled-arity helpers. |
+| `flint-reader.wasm` | the kin reader alone: source text to `flint.forms` bytes, for a host that reads outside the compiler (`DECISIONS.md#namespaces-over-the-system-port`). |
+| `stdcore.forms`, `stdextra.forms` | the standard library, read, in its required and optional layers (`bin/build-stdlib-forms`). |
 | `builtins.json`, `slots.json`, `slots-aot.json` | what those runtimes carry, and where. |
 | `src/loader.cljc` | generated: names every builtin so the linker keeps it. |
 
@@ -21,30 +23,28 @@ That is the whole point: `bin/flint` needs all four and only runs on a
 developer machine.
 
 ```js
-import { Compiler, Runtime } from '@3sln/flint';
+import { Compiler, chain, fromMap } from '@3sln/flint';
+import { stdextra } from '@3sln/flint/stdextra';
 
 const compiler = await Compiler.load();
-const runtime  = await Runtime.load();
-
-const image = compiler.compile({
-  files: { 'app.cljc': '(ns app)\n(defn main [args] (str "hi " (first args)))' },
-  entry: 'app/main',
+const image = await compiler.compile({
+  fn: 'app/main',
+  resolve: chain(stdextra(), fromMap({
+    'app.cljc': '(ns app)\n(defn main [args] (str "hi " (first args)))',
+  })),
 });
-
-runtime.run(image, ['there']);   // => { code: 0, out: 'hi there' }
+await (await image.sandbox()).call('app/main', [['there']]);   // => 'hi there'
 ```
 
-The loader resolves an image's builtins **by name** when it loads it, so
-nothing on the host patches table slots or knows the image format.
+The compiler asks the host for each namespace it reaches, over a port, and the
+host answers with source it READ itself, with `flint-reader.wasm`
+(`DECISIONS.md#namespaces-over-the-system-port`). What comes back is a
+standalone module; `optimize: ['perf']` appends compiled arities to it.
 
-It also emits a **standalone module**, which is what a compiler is expected to
-produce — the image above is internal machinery:
-
-```js
-const wasm = compiler.compileToWasm({ files, entry: 'app/main' });        // 600 KB
-const fast = compiler.compileToWasm({ files, entry: 'app/main',           // 638 KB
-                                      aot: true, runtime, slots });
-```
+*This section showed `Runtime.load()` and `compiler.compileToWasm(..)` until
+2026-10-07, neither of which the SDK exports, and the sizes beside them (600 KB,
+638 KB) were never re-measured against the current runtime; they are dropped
+rather than carried.*
 
 No linker in either path. The runtime module was linked once, when flint was
 built; splicing an image into it and appending compiled arities is byte

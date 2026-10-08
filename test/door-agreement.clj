@@ -1,5 +1,6 @@
-;; THE THREE DOORS PRODUCE THE SAME BYTES, ACROSS EVERY TARGET AND BOTH
-;; `:optimize` MODES.
+;; THE FOUR DOORS PRODUCE THE SAME BYTES, ACROSS EVERY TARGET AND BOTH
+;; `:optimize` MODES: `bin/flint`, the native CLI, the npm CLI, and the ESM SDK
+;; (`test/esm-door.mjs`, driving the shipped bundle as an embedder would).
 ;;
 ;; `DECISIONS.md#compiles-are-byte-reproducible` is the decision; this is the
 ;; matrix behind it. `test/selfhost-targets.clj` keeps ONE cheap row of this in
@@ -46,6 +47,7 @@
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (def cli (str root "/target/release/flint"))
 (def npm (str root "/sdks/cli/bin/flint.mjs"))
+(def esm (str root "/test/esm-door.mjs"))
 (def work (str (fs/create-temp-dir {:prefix "flint-doors"})))
 (def src (str work "/src"))
 (fs/create-dirs src)
@@ -59,16 +61,22 @@
   "Compile the fixture through `door` to `base`, and answer the path written.
 
   `bin/flint` spells the source root `:src` and takes no `compile` verb; the
-  other two spell it `:path`. That is the only difference the doors are allowed
-  to have here."
-  [door base flags]
-  (let [out (str work "/" door "/" base)]
-    (fs/create-dirs (str work "/" door))
-    (apply sh (case door
-                "bb"  (concat [(str root "/bin/flint") ":src" src ":fn" "t/main"] flags [":out" out])
-                "nat" (concat [cli "compile" ":path" src ":fn" "t/main"] flags [":out" out])
-                "npm" (concat ["node" npm "compile" ":path" src ":fn" "t/main"] flags [":out" out])))
-    out))
+  CLIs spell it `:path`; the ESM door is an embedder, so it takes positional
+  arguments and reads `:to` and `[perf]` out of the same flags. That is the only
+  difference the doors are allowed to have here."
+  ([door base flags] (emit door base flags src "t/main"))
+  ([door base flags src entry]
+   (let [out (str work "/" door "/" base)
+         to (or (second (drop-while #(not= ":to" %) flags)) ":wasm")
+         perf? (some #{"[perf]"} flags)]
+     (fs/create-dirs (str work "/" door))
+     (fs/delete-if-exists out)
+     (apply sh (case door
+                 "bb"  (concat [(str root "/bin/flint") ":src" src ":fn" entry] flags [":out" out])
+                 "nat" (concat [cli "compile" ":path" src ":fn" entry] flags [":out" out])
+                 "npm" (concat ["node" npm "compile" ":path" src ":fn" entry] flags [":out" out])
+                 "esm" (cond-> ["node" esm src entry to out] perf? (conj "perf"))))
+     out)))
 
 (if-not (fs/exists? cli)
   (println "  --   no target/release/flint; every row below needs it, so NONE ran")
@@ -79,11 +87,12 @@
     ;; strip one extension and the assembly is `a_b`, strip greedily and it is
     ;; `a`. `flint.clr/assembly-name` is the only copy of that rule now.
     (doseq [base ["app.dll" "a.b.dll" "9odd-name.v2.dll"]]
-      (check-that (str "`:to :clr :out " base "`: all three doors agree byte for byte")
+      (check-that (str "`:to :clr :out " base "`: all four doors agree byte for byte")
                   (let [a (emit "bb" base [":to" ":clr"])
                         b (emit "nat" base [":to" ":clr"])
-                        c (emit "npm" base [":to" ":clr"])]
-                    (and (same? a b) (same? a c)))))
+                        c (emit "npm" base [":to" ":clr"])
+                        d (emit "esm" base [":to" ":clr"])]
+                    (and (same? a b) (same? a c) (same? a d)))))
     (check-that "the comparison can tell two assembly names apart"
                 (not (same? (emit "bb" "app.dll" [":to" ":clr"])
                             (emit "bb" "other.dll" [":to" ":clr"]))))
@@ -96,9 +105,9 @@
     ;; instruction is that the artefacts produced by the clj implementation and
     ;; the built-in platform emitters need not match, and `sdks/cli/selftest.mjs`
     ;; holds the native and npm doors to each other for wasm in five rows.
-    (doseq [[target base doors] [["clr" "Agree.dll" ["bb" "nat" "npm"]]
-                                 ["jvm" "Agree.class" ["bb" "nat" "npm"]]
-                                 ["llvm" "agree.ll" ["bb" "nat" "npm"]]]
+    (doseq [[target base doors] [["clr" "Agree.dll" ["bb" "nat" "npm" "esm"]]
+                                 ["jvm" "Agree.class" ["bb" "nat" "npm" "esm"]]
+                                 ["llvm" "agree.ll" ["bb" "nat" "npm" "esm"]]]
             [label extra] [["plain" []] [":optimize [perf]" [":optimize" "[perf]"]]]]
       (let [flags (concat [":to" (str ":" target)] extra)
             paths (mapv (fn [d] [d (emit d base flags)]) doors)
@@ -115,6 +124,46 @@
     (check-that "the comparison can tell :optimize [perf] from plain"
                 (not (same? (emit "bb" "ctl-a.ll" [":to" ":llvm"])
                             (emit "bb" "ctl-b.ll" [":to" ":llvm" ":optimize" "[perf]"]))))
+
+    ;; --- THE CORPUS, as wasm images, through the three doors that splice ----
+    ;;
+    ;; `bin/flint` composes its module and the other three splice a prebuilt
+    ;; runtime (see above), so these rows compare the native CLI, the npm CLI and
+    ;; the ESM SDK: every top-level `corpus/*.cljc`, plain and `:optimize [perf]`,
+    ;; with `corpus/` as the one source root. The JavaScript doors compile through
+    ;; the compile CALL with namespaces answered over a port
+    ;; (`DECISIONS.md#namespaces-over-the-system-port`); the native CLI still
+    ;; compiles through its EDN spec. A program flint refuses must be refused by
+    ;; all three: an image from one door and none from another is a disagreement.
+    ;;
+    ;; ONE PROGRAM BY DEFAULT, `nbody`; `FLINT_DOORS_CORPUS=all` for every one,
+    ;; `=a,b` for a few. The whole sweep was 45.5 min of this file's run
+    ;; (2026-10-07, `time bb test/door-agreement.clj`, load average 25-75 from
+    ;; other work), against the 74 s `bin/test`'s `doors` section was budgeted;
+    ;; 21 programs x 2 modes agreed and caesar/dijkstra were refused by all three
+    ;; (`DECISIONS.md#namespaces-over-the-system-port`, §8 step 4).
+    (let [sel (or (System/getenv "FLINT_DOORS_CORPUS") "nbody")
+          only (when-not (= sel "all") (clojure.string/split sel #","))
+          corpus (str root "/corpus")
+          names (->> (fs/list-dir corpus)
+                     (map #(str (fs/file-name %)))
+                     (filter #(clojure.string/ends-with? % ".cljc"))
+                     (map #(clojure.string/replace (subs % 0 (- (count %) 5)) "_" "-"))
+                     (filter #(or (nil? only) (some #{%} only)))
+                     sort)]
+      (doseq [n names
+              [label extra] [["plain" []] [":optimize [perf]" [":optimize" "[perf]"]]]]
+        (let [flags (concat [":to" ":wasm"] extra)
+              base (str "corpus-" n (if (seq extra) "-perf" "") ".wasm")
+              paths (mapv (fn [d] [d (emit d base flags corpus (str n "/main"))]) ["nat" "npm" "esm"])
+              made (filter (fn [[_ p]] (fs/exists? p)) paths)
+              [_ first-path] (first paths)
+              bad (remove (fn [[_ pth]] (same? first-path pth)) (rest paths))]
+          (check-that (str "corpus " n " " label ": nat, npm, esm "
+                           (cond (empty? made) "all refuse it"
+                                 (empty? bad) "agree byte for byte"
+                                 :else (str "DISAGREE: " (clojure.string/join ", " (map first bad)))))
+                      (or (empty? made) (empty? bad))))))
 
     ;; --- and the largest program in the repo, which is the compiler ---------
     ;;

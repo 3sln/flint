@@ -140,6 +140,15 @@ echo "==> the AOT runtime module, for `flint compile wasm-aot`"
   indent ./bin/flint :src dist/src :fn loader/main :out dist/flint-runtime-aot.wasm --loader )
 ./bin/build-units > /dev/null
 
+echo "==> the reader module, for hosts that read source outside the compiler"
+# `bin/build-units` linked it (`units-src/flint-reader`); this freezes it into
+# `dist/` beside the artefacts it has to agree with. It is the kin reader the
+# runtime already carries, alone, so a JavaScript host can answer a namespace
+# request with forms bytes (`DECISIONS.md#namespaces-over-the-system-port`).
+cp units/.reader/flint-reader.wasm dist/flint-reader.wasm.tmp
+freshen dist/flint-reader.wasm.tmp dist/flint-reader.wasm
+printf '    dist/flint-reader.wasm %s bytes\n' "$(wc -c < dist/flint-reader.wasm | tr -d ' ')"
+
 echo "==> the compiler, as a module and as bytecode"
 # Two forms of the same compiler. The MODULE is the artifact: it is what a wasm
 # host runs, and what the SDK carries. The BYTECODE is an implementation
@@ -157,6 +166,13 @@ freshen dist/flintc.bytecode.tmp dist/flintc.bytecode
 
 indent ./bin/flint :src src :fn flint.selfhost/main :exports flint.selfhost/compile :out dist/flintc.wasm.tmp
 freshen dist/flintc.wasm.tmp dist/flintc.wasm
+
+echo "==> the standard library, read, in its two layers"
+# `dist/stdcore.forms` and `dist/stdextra.forms`, which both JavaScript doors
+# embed (`DECISIONS.md#namespaces-over-the-system-port` §4). Needs the reader
+# module and the compiler above: which namespaces are stdcore is ASKED of the
+# compiler, by compiling a program that requires nothing.
+indent ./bin/build-stdlib-forms
 
 # Both forms of the compiler are built, so the stamp is true of both -- and it
 # is written and frozen last, after both, so a stamp that made it to `dist/`

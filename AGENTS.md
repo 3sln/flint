@@ -263,8 +263,9 @@ git worktree add ../flint-<topic> -b <branch>
 
 A fresh worktree **cannot build until `dist/` is generated in it**. Five files
 in `dist/` are tracked, but `flintc.bytecode`, `flintc.wasm`,
-`flint-runtime.wasm`, `flint-runtime-aot.wasm` and `flint-loader.wasm` are
-gitignored, and `cli/build.rs` panics naming the first. So:
+`flint-runtime.wasm`, `flint-runtime-aot.wasm`, `flint-loader.wasm`,
+`flint-reader.wasm`, `stdcore.forms` and `stdextra.forms` are gitignored
+(`.gitignore` is the list), and `cli/build.rs` panics naming the first. So:
 
 ```
 export JAVA_HOME=/opt/homebrew/opt/openjdk        # see below

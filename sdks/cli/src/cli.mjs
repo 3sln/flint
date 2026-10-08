@@ -21,18 +21,20 @@ function isFile(p) {
 }
 import { instantiate } from '../dist/guest.js';
 import {
-  compilerWasm, runtimeWasm, runtimeAotWasm, slots, slotsAot, stdlib, stdlibDeps,
-  depsWorkspaceDeps,
+  compilerWasm, runtimeWasm, runtimeAotWasm, slots, slotsAot, readerWasm, stdcoreForms,
+  stdextraForms,
 } from './artifacts.mjs';
-import { buildSpec, testRoots, scriptSpec } from './spec.mjs';
+import { scriptSpec } from './script.mjs';
+import { projectResolver, testRoots } from './resolver.mjs';
+import {
+  Reader, layer, compileCall, compileRequest, renderErrors, DEFAULT_FEATURES, PERF_FEATURES,
+} from '../dist/resolve.js';
 import { Policy } from './policy.mjs';
 import { Fs, Env, Slurp, Wasm, Ception } from './sys.mjs';
 import { Npm, Mvn, Git } from './deps.mjs';
 import { capabilitiesFor } from './serve.mjs';
 import { VERSION } from './version.mjs';
 
-const b64encode = (bytes) => Buffer.from(bytes).toString('base64');
-const b64decode = (text) => new Uint8Array(Buffer.from(text, 'base64'));
 
 /// What to optimise for. An ORDERED PREFERENCE, not a switch.
 ///
@@ -58,38 +60,47 @@ function wantsAot(optimize) {
   return false;
 }
 
-/// Run the compiler over a spec and hand back what it said.
+/// Compile once, through the compile CALL (`DECISIONS.md#namespaces-over-the-system-port`):
+/// a request map and a resolver port this process answers from `srcs` -- or,
+/// for `flint.ception`, from a `{ns: text}` map -- with stdcore answered from
+/// the embedded copy before the resolver is asked anything. Answers the
+/// artifact bytes, or throws the compiler's errors as the sentences this CLI
+/// has always printed.
 ///
-/// The runtime module goes as its own ARGUMENT, never inside the spec: it is
-/// three-quarters of a megabyte of base64, and inside an EDN string it is
-/// three-quarters of a megabyte for flint's reader to scan a character at a
-/// time -- 198 seconds against 10.
-// SYNCHRONOUS, and deliberately so. `new WebAssembly.Module` compiles without
-// a promise and `inst.run` is a pump rather than a task, so nothing here needs
-// to await -- which is what lets `flint.ception` serve the compiler over a port
-// (`DECISIONS.md#flint-ception`): a served `invoke` has to answer in one call.
-// Callers that still say `await compile(...)` are unaffected; awaiting a plain
-// value is a no-op.
-function runCompiler(args) {
-  const module = new WebAssembly.Module(compilerWasm());
-  const inst = instantiate(module);
+/// SYNCHRONOUS, and deliberately so: the filesystem resolver answers without a
+/// promise, so `compileCall` never has to wait, which is what lets
+/// `flint.ception` serve the compiler over a port (`DECISIONS.md#flint-ception`)
+/// -- a served `invoke` has to answer in one call.
+let theReader = null;
+function compileVia({ srcs = null, sources = null, entry, target, optimize = [], checks = null,
+                      features = null, exports = [], meta = [], roots = null, shake = false,
+                      table = null, base = null, name = null, className = null }) {
+  const aot = wantsAot(optimize);
+  // THE STRIP-CHECKS SET KEEPS `:flint/nested`, and is said only when it
+  // differs from the default -- the native CLI's `read_features`, so the two
+  // doors send the compiler the same features and read user text under them.
+  const said = features ?? (stripChecks(optimize, checks) ? PERF_FEATURES : null);
+  const nested = said === null || said.includes(':flint/nested');
+  const resolve = projectResolver({ srcs, sources, stdextra: stdextraForms(), nested });
+  const request = compileRequest({
+    entry, target, roots, exports, features: said, aot, shake, meta,
+    slots: table ?? slots(), base, name, className,
+  });
+  const inst = instantiate(new WebAssembly.Module(compilerWasm()));
   // Compiling a whole program can outgrow the 512 MB default, and past it an
   // allocation answers NIL, the NIL reaches the tree, and the failure surfaces
   // as `memory access out of bounds` with nothing pointing at the cap.
   if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(3_000_000_000);
-  const r = inst.run('flint.selfhost/main', args);
-  if (r.code !== 0) throw new Error(r.out.trim());
-  if (r.out.startsWith('!missing')) {
-    throw new Error(
-      `no source for${r.out.slice('!missing'.length).replace(/\n/g, ' ')}\n` +
-      'every namespace a program requires has to be on the source path');
+  if (!theReader) theReader = Reader.loadSync(readerWasm());
+  const r = compileCall(inst, request, {
+    resolve, stdcore: layer(stdcoreForms()), reader: theReader, features: said ?? DEFAULT_FEATURES,
+  });
+  if (r[':errors']) {
+    const err = new Error(renderErrors(r[':errors']));
+    err.errors = r[':errors'];
+    throw err;
   }
-  // A REFUSED require is not a missing one: the source is there and readable,
-  // and the answer is that this workspace may not have it. The guest has
-  // already formed the sentence -- it names both ends and the capability -- so
-  // this passes it through rather than rewording it.
-  if (r.out.startsWith('!refused')) throw new Error(r.out.slice('!refused'.length).trim());
-  return r.out;
+  return r[':artifact'];
 }
 
 /// The module bytes, without writing them anywhere.
@@ -108,12 +119,16 @@ export function compileBytes(srcs, entry, optimize, to, meta,
     throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`)`);
   }
   const aot = wantsAot(optimize);
-  const spec = buildSpec({
-    srcs, entry, slots: aot ? slotsAot() : slots(), aot, shake: true, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
-    stripChecks: stripChecks(optimize, checks), exports, features,
+  return compileVia({
+    ...from(srcs), entry, target: 'wasm', optimize, checks, features, exports, meta, shake: true,
+    table: aot ? slotsAot() : slots(), base: aot ? runtimeAotWasm() : runtimeWasm(),
   });
-  return b64decode(runCompiler(['wasm', spec, b64encode(aot ? runtimeAotWasm() : runtimeWasm())]).trim());
+}
+
+/// `srcs` is source roots, or `{ sources: [[ns, text], ..] }` -- what
+/// `flint.ception` hands over, compiled from memory rather than spilled to disk.
+function from(srcs) {
+  return Array.isArray(srcs) ? { srcs } : { sources: srcs.sources };
 }
 
 /// `:to :llvm`: LLVM IR, TEXT out.
@@ -121,7 +136,7 @@ export function compileBytes(srcs, entry, optimize, to, meta,
 /// THIS PACKAGE REFUSED IT UNTIL 2026-09-26 AND CARRIED THE EMITTER ALL ALONG.
 /// `src/flint/llvm.cljc` is portable cljc with no reader conditionals, and
 /// `src/flint/selfhost.cljc` already accepts `"llvm"` as a mode and calls
-/// `compile-to-llvm` -- inside `dist/flintc.wasm`, which is what `runCompiler`
+/// `compile-to-llvm` -- inside `dist/flintc.wasm`, which is what `compileVia`
 /// below runs. So the refusal was unwired dispatch and not a missing capability,
 /// and the comment that said "`:to :llvm` is not available from this package"
 /// was about the dispatch rather than the compiler.
@@ -132,13 +147,9 @@ export function compileBytes(srcs, entry, optimize, to, meta,
 /// `--gc-sections`.
 function compileLlvmText(srcs, entry, optimize,
                          { checks = null, exports = [], features = null } = {}) {
-  const aot = wantsAot(optimize);
-  const spec = buildSpec({
-    srcs, entry, slots: slots(), aot, shake: false, meta: [], roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
-    stripChecks: stripChecks(optimize, checks), exports, features,
-  });
-  const out = runCompiler(['llvm', spec]);
+  const out = new TextDecoder().decode(compileVia({
+    ...from(srcs), entry, target: 'llvm', optimize, checks, features, exports,
+  }));
   // A `.ll` THAT IS NOT IR is the failure to refuse rather than write, for the
   // reason the native CLI gives: the guest answers with a string either way, and
   // a diagnostic written into an artifact is found out by the linker three
@@ -164,13 +175,10 @@ function compileLlvmText(srcs, entry, optimize,
 /// it, so the three doors' bytes could not agree.
 function compileClrBytes(srcs, entry, optimize, meta,
                          { checks = null, exports = [], features = null, name = '' } = {}) {
-  const aot = wantsAot(optimize);
-  const spec = buildSpec({
-    srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
-    stripChecks: stripChecks(optimize, checks), exports, features,
+  const asm = compileVia({
+    ...from(srcs), entry, target: 'clr', optimize, checks, features, exports, meta,
+    name: String(name ?? ''),
   });
-  const asm = b64decode(runCompiler(['clr', spec, String(name ?? '')]).trim());
   // A SNIFF TEST, for the reason the native CLI gives: the guest answers with a
   // string either way, so a diagnostic written into an artifact would be found
   // out by whoever loaded it with no idea which step lied. `MZ` starts every PE.
@@ -188,7 +196,7 @@ function compileClrBytes(srcs, entry, optimize, meta,
 ///
 /// THIS PACKAGE REFUSED `:to :jvm` UNTIL 2026-09-28 AND CARRIED THE EMITTER ALL
 /// ALONG -- the same story `compileLlvmText` tells above. `selfhost.cljc` accepts
-/// `"jvm"` as a mode, inside the `dist/flintc.wasm` that `runCompiler` runs, so
+/// `"jvm"` as a mode, inside the `dist/flintc.wasm` that `compileVia` runs, so
 /// the refusal was unwired dispatch. `doc/api-review.md` recorded it as the
 /// asymmetry that "looks most like a gap", with nothing written down for it.
 ///
@@ -197,13 +205,10 @@ function compileClrBytes(srcs, entry, optimize, meta,
 /// the class.
 function compileJvmBytes(srcs, entry, optimize, meta, name,
                          { checks = null, exports = [], features = null } = {}) {
-  const aot = wantsAot(optimize);
-  const spec = buildSpec({
-    srcs, entry, slots: slots(), aot, shake: false, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
-    stripChecks: stripChecks(optimize, checks), exports, features,
+  const klass = compileVia({
+    ...from(srcs), entry, target: 'jvm', optimize, checks, features, exports, meta,
+    className: name ? String(name) : null,
   });
-  const klass = b64decode(runCompiler(['jvm', spec, '', String(name ?? '')]).trim());
   // A SNIFF TEST, for `compileClrBytes`'s reason. `CAFEBABE` opens every class file.
   if (klass.length < 4 || klass[0] !== 0xca || klass[1] !== 0xfe
       || klass[2] !== 0xba || klass[3] !== 0xbe) {
@@ -280,15 +285,10 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
     throw new Error(`no such target \`${target}\` (\`:to :wasm\`, \`:to :clr\`, \`:to :jvm\`, \`:to :llvm\`)`);
   }
   const aot = wantsAot(optimize);
-  const table = aot ? slotsAot() : slots();
-  const base = aot ? runtimeAotWasm() : runtimeWasm();
-  const spec = buildSpec({
-    srcs, entry, slots: table, aot, shake: true, meta, roots: null,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
-    stripChecks: stripChecks(optimize, checks), features,
+  const module = compileVia({
+    srcs, entry, target: 'wasm', optimize, checks, features, meta, shake: true,
+    table: aot ? slotsAot() : slots(), base: aot ? runtimeAotWasm() : runtimeWasm(),
   });
-  const out = runCompiler(['wasm', spec, b64encode(base)]);
-  const module = b64decode(out.trim());
   writeFileSync(outPath, module);
   // `flint.ception` serves this to a PROGRAM, and a library call that prints to the
   // user's terminal is chatter the caller did not ask for -- `flint task` would
@@ -313,19 +313,17 @@ export function compile(srcs, entry, outPath, optimize, to, meta,
 /// disagree with `compile`.
 export function runSource(srcs, entry, args, caps, roots,
                           { quiet = false, stripChecks: strip = false } = {}) {
-  const spec = buildSpec({
-    srcs, entry, slots: slots(), aot: false, shake: true, meta: [], roots,
-    stdlib: stdlib(), stdlibDeps: stdlibDeps(), depsWorkspaceDeps: depsWorkspaceDeps(),
-    // THE HALF OF `:optimize` A RUN CAN HONOUR. `:optimize [perf]` means two
-    // things on `compile` -- compile every arity, and strip
-    // `#?(:flint/check ..)` -- and `run` was honouring neither while reporting
-    // only the first, on BOTH CLIs. `doc/api-review.md` records `flint run` as
-    // "served by both, identically", which is a claim that only stays true if
-    // the option lands here at the same time.
-    stripChecks: strip,
+  // THE HALF OF `:optimize` A RUN CAN HONOUR. `:optimize [perf]` means two
+  // things on `compile` -- compile every arity, and strip
+  // `#?(:flint/check ..)` -- and `run` was honouring neither while reporting
+  // only the first, on BOTH CLIs. `doc/api-review.md` records `flint run` as
+  // "served by both, identically", which is a claim that only stays true if
+  // the option lands here at the same time.
+  const bytes = compileVia({
+    ...from(srcs), entry, target: 'wasm', checks: !strip, roots, shake: true,
+    table: slots(), base: runtimeWasm(),
   });
-  const out = runCompiler(['wasm', spec, b64encode(runtimeWasm())]);
-  const module = new WebAssembly.Module(b64decode(out.trim()));
+  const module = new WebAssembly.Module(bytes);
   const inst = instantiate(module, {
     stepLimit: process.env.FLINT_STEP_LIMIT ? Number(process.env.FLINT_STEP_LIMIT) : 0,
   });

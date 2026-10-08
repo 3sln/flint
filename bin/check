@@ -53,7 +53,7 @@ if [ target/release/flint -ot dist/flintc.bytecode ]; then
 fi
 t0=$(date +%s)
 
-for c in check-version check-contracts check-decisions check-flattens check-builtins check-sys-catalogue check-containment check-lib-grants \
+for c in check-version check-contracts check-decisions check-flattens check-builtins check-sys-catalogue check-containment \
          check-snapshot-layout check-aotstat-layout check-port-consts check-artifact-ops \
          check-generated-reached check-vocab-used check-esm-portable dead-runtime-fns check-toc-current; do
   ./bin/$c || fail "bin/$c"

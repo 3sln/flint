@@ -17,9 +17,8 @@
 
 import {
   readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync,
-  rmSync, unlinkSync, mkdtempSync,
+  rmSync, unlinkSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { varsOf } from './catalogue.mjs';
@@ -259,22 +258,6 @@ export class Ception {
   /// child it wrote.
   constructor(ops) { this.ops = ops; this.boxes = []; this.callers = []; }
 
-  /// Caller-supplied sources, in a private temporary directory.
-  ///
-  /// The host touching its own disk, not the guest reaching anything: no path
-  /// here is caller-controlled, and it is removed on the way out. Reusing the
-  /// ordinary spec builder keeps one of them rather than a second that agrees
-  /// with it until it does not.
-  spill(sources) {
-    const dir = mkdtempSync(join(tmpdir(), 'flint-ception-'));
-    for (const [ns, body] of sources) {
-      const at = join(dir, `${ns.replace(/-/g, '_').replace(/\./g, '/')}.cljc`);
-      mkdirSync(dirname(at), { recursive: true });
-      writeFileSync(at, body);
-    }
-    return dir;
-  }
-
   /// Whether the caller holds `want`, by the same spelling `:with` uses. A bare
   /// `fs` covers `fs:write`; holding `fs:write` does NOT confer a bare `fs`,
   /// which would be a widening.
@@ -304,15 +287,18 @@ export class Ception {
       // the artifact bytes back, so `sdk` confers no filesystem reach at all.
       case 'compile': {
         const o = args[0] || {};
-        const dir = this.spill(sourcesOf(o));
-        try {
-          const bytes = this.ops.compileBytes([dir], str(o, 'fn', 'compile needs :fn "ns/fn"'),
-                                              strings(o, 'optimize'), pick(o, 'to') ?? 'wasm',
-                                              metaOf(o),
-                                              { checks: typeof pick(o, 'checks') === 'boolean' ? pick(o, 'checks') : null,
-                                                exports: strings(o, 'exports') });
-          return c.bytes(bytes);
-        } finally { rmSync(dir, { recursive: true, force: true }); }
+        // FROM MEMORY. These used to be written to a private temporary
+        // directory so the ordinary spec builder could read them back; the
+        // compiler asks for namespaces now, so the map answers it directly
+        // (`DECISIONS.md#namespaces-over-the-system-port`) and no file name --
+        // and no guessed extension -- is ever made up for them.
+        const bytes = this.ops.compileBytes({ sources: sourcesOf(o) },
+                                            str(o, 'fn', 'compile needs :fn "ns/fn"'),
+                                            strings(o, 'optimize'), pick(o, 'to') ?? 'wasm',
+                                            metaOf(o),
+                                            { checks: typeof pick(o, 'checks') === 'boolean' ? pick(o, 'checks') : null,
+                                              exports: strings(o, 'exports') });
+        return c.bytes(bytes);
       }
       // `(sandbox image)` -- a loaded, callable program that holds NOTHING.
       // No ports, no capabilities, no IO: it reaches the world only through
@@ -425,12 +411,9 @@ export class Ception {
             + `it holds: ${held}\n`
             + 'a program may pass on what it has, not mint what it has not.');
         }
-        const dir = this.spill(sourcesOf(o));
-        try {
-          const r = this.ops.runSource([dir], fn, strings(o, 'args'), caps, undefined,
-                                       { quiet: true });
-          return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
-        } finally { rmSync(dir, { recursive: true, force: true }); }
+        const r = this.ops.runSource({ sources: sourcesOf(o) }, fn, strings(o, 'args'), caps,
+                                     undefined, { quiet: true });
+        return c.map([[c.kw('code'), c.int(r.code)], [c.kw('out'), c.str(r.out)]]);
       }
       case 'version':
         return c.str(this.ops.version);

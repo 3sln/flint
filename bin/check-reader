@@ -13,6 +13,7 @@
 #   1. `cargo test -p flint-cli kin_reader` reads every file through the
 #      embedded compiler (the reference) and the native kin reader, compares,
 #      and writes the reference to a private directory;
+#   1b. `test/wasm-reader.mjs` reads them through `dist/flint-reader.wasm`;
 #   2. `runtimes/jvm/test/RtReader.java` reads the same files on the JVM;
 #   3. `Conform --rt-reader` reads them on the CLR.
 #
@@ -31,6 +32,19 @@ if ! FLINT_READER_REF_DIR="$work/refs" cargo test --release -p flint-cli kin_rea
   exit 1
 fi
 grep -E "^kin reader" "$work/native.out" | sed 's/^/  native: /'
+
+# 1b. the WASM copy -- `dist/flint-reader.wasm`, which the JavaScript doors read
+# source with -- through one module instance for every read, as a host runs it.
+if [ -f dist/flint-reader.wasm ]; then
+  if node test/wasm-reader.mjs "$work/refs" > "$work/wasm.out" 2>&1; then
+    sed 's/^/  /' "$work/wasm.out"
+  else
+    sed 's/^/  /' "$work/wasm.out"; echo "  FAIL the wasm kin reader"; exit 1
+  fi
+else
+  echo "  FAIL no dist/flint-reader.wasm: run bin/build-dist; the wasm row was NOT checked"
+  exit 1
+fi
 
 JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
 [ -x "$JDK/bin/javac" ] || JDK=/opt/homebrew/opt/openjdk

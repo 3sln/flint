@@ -551,6 +551,93 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     };
   }
 
+  /// A port THIS HOST owns, to pass into a call as an argument
+  /// (`DECISIONS.md#namespaces-over-the-system-port`): holding it is the
+  /// sandbox's only way to talk back, and every message it sends on it goes to
+  /// the `serve` of the `callServing` it was passed to. The native host's
+  /// `Host::mint_port`.
+  const served = new Map();
+  function mintPort() {
+    const port = newPortId();
+    const queue = [];
+    served.set(port, queue);
+    // Routed and counted like a granted port: the retain the runtime pushes
+    // when the port arrives inside the call is what makes `holders` 1.
+    const cap = { message: (p, value) => queue.push(value) };
+    ports.set(port, { cap, holders: 0 });
+    openPorts.set(port, cap);
+    return port;
+  }
+
+  /// Call `name` with `args` and SERVE what it sends on minted ports while it
+  /// runs: `serve(port, value)` answers each message with a value -- or a
+  /// PROMISE of one -- which goes back on the same port. The native host's
+  /// `Host::call_serving`.
+  ///
+  /// Answers the call's value SYNCHRONOUSLY when every `serve` did, and a
+  /// promise of it as soon as one did not: a parked sandbox's state outlives
+  /// the drive, so the loop can return, await, deliver and resume. That is what
+  /// lets one driver serve a filesystem resolver inside a synchronous host
+  /// (`flint.ception`) and a fetching one in a browser.
+  function callServing(name, args, serve) {
+    if (!theCaller) theCaller = caller();
+    const port = theCaller.port;
+    const tx = nextTx++;
+    let answer;
+    pending.set(tx, (m) => { answer = m; });
+    if (!tryDeliverBytes(port, callBytes(tx, name, args))) {
+      pending.delete(tx);
+      throw new Error('flint: the call port would not take the call');
+    }
+    let code = e.flint_resume();
+    let guard = 0;
+    const finish = () => {
+      pending.delete(tx);
+      if (answer === undefined) {
+        if (code === 1) {
+          const rendered = dec.decode(new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
+          if (rendered) throw new Error(rendered);
+        }
+        throw new Error(`flint: the call to ${name} was never answered`);
+      }
+      if (answer[':op'] === ':throw') {
+        const err = new Error(`${answer[':kind']}: ${answer[':message']}`);
+        err.kind = answer[':kind'];
+        err.flint = answer;
+        throw err;
+      }
+      return answer[':value'];
+    };
+    const step = () => {
+      for (;;) {
+        if (++guard > 1e6) {
+          pending.delete(tx);
+          const err = new Error(`flint: ${WEDGED}`);
+          err.status = 4;
+          throw err;
+        }
+        for (const ev of drain()) handle(ev);
+        flush();
+        if (answer !== undefined) return finish();
+        let job = null;
+        for (const [p, q] of served) if (q.length) { job = [p, q.shift()]; break; }
+        if (job) {
+          const [p, msg] = job;
+          const reply = serve(p, msg);
+          if (reply && typeof reply.then === 'function') {
+            return reply.then((v) => { deliver(p, v); code = e.flint_resume(); return step(); });
+          }
+          deliver(p, reply);
+          code = e.flint_resume();
+          continue;
+        }
+        if (code !== 2) return finish();
+        code = e.flint_resume();
+      }
+    };
+    return step();
+  }
+
   /// One caller, made on first use, for hosts that only ever make one.
   ///
   /// `inst.call(name, argsArray)` is sugar over it and keeps the ARRAY
@@ -591,6 +678,8 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     pump,
     call,
     caller,
+    mintPort,
+    callServing,
     grant: (name, handler) => { capabilities[name] = handler; ensureSystem(); },
     capabilities: (m) => { capabilities = m; ensureSystem(); },
     /// Answer `(request "name" ..)` from the guest. `fn(args, name, api)`

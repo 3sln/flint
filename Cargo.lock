@@ -314,6 +314,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flint-reader"
+version = "0.1.0"
+dependencies = [
+ "flint-rt",
+]
+
+[[package]]
 name = "flint-rt"
 version = "0.1.0"
 dependencies = [

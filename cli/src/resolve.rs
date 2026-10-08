@@ -56,12 +56,9 @@ impl Answers {
     /// `ns`, as a wire value -- `Val::Nil` when there is no source and no
     /// virtual entry claims it.
     pub(crate) fn answer(&self, ns: &str) -> Val {
-        // `flint.project/ns->path`'s mapping, read off `crate::ns_to_path`
-        // rather than reimplemented: that function already applies it (with a
-        // `.cljc` suffix this resolver has no use for, so it is trimmed
-        // straight back off).
-        let full = crate::ns_to_path(ns);
-        let base = full.strip_suffix(".cljc").unwrap_or(&full);
+        // `flint.project/ns->path`'s mapping, with no extension: which file
+        // answers is `source-extensions`' choice below, not the mapping's.
+        let base = &crate::script::ns_key(ns, "");
         let base_slash = format!("{base}/");
 
         // VIRTUAL FIRST -- `files-resolver` checks every virtual workspace
@@ -347,7 +344,11 @@ mod tests {
         let a = Answers::new(&[dir.clone()], &[], None).unwrap();
         let v = a.answer("app");
         assert_eq!(v.get("file").and_then(Val::as_str), Some("app.cljc"));
-        assert!(v.get("source").is_some());
+        // READ BY THE HOST since `f9f898e6`: `Answers::new` always reads project
+        // files under the compile's features, so the answer is forms and a
+        // dialect, not text. This asserted `:source` and failed from that commit.
+        assert!(v.get("forms").is_some() && v.get("source").is_none());
+        assert_eq!(v.get("dialect"), Some(&kw("portable")));
         assert!(v.get("workspace").is_none());
         let _ = fs::remove_dir_all(&dir);
     }

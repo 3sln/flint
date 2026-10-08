@@ -1,0 +1,15 @@
+[package]
+name = "flint-reader"
+version = "0.1.0"
+edition = "2021"
+description = "flint's kin reader as a small standalone wasm module, for hosts that read source outside the compiler sandbox"
+
+# Built by `bin/build-units` with rustc and linked by rust-lld into
+# `dist/flint-reader.wasm` -- NOT a unit (it has no manifest and provides no
+# builtin), and not linked into any program. A workspace member so that a
+# host `cargo build`/`cargo test` type-checks it.
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+flint-rt = { path = "../../runtime" }

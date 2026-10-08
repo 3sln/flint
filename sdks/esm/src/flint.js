@@ -18,23 +18,43 @@
 import COMPILER from '../../../dist/flintc.wasm' with { type: 'bytes' };
 import RUNTIME from '../../../dist/flint-runtime.wasm' with { type: 'bytes' };
 import RUNTIME_AOT from '../../../dist/flint-runtime-aot.wasm' with { type: 'bytes' };
+import READER from '../../../dist/flint-reader.wasm' with { type: 'bytes' };
 import SLOTS_JSON from '../../../dist/slots.json' with { type: 'bytes' };
 import SLOTS_AOT_JSON from '../../../dist/slots-aot.json' with { type: 'bytes' };
-import STDLIB_JSON from '../gen/stdlib.json' with { type: 'bytes' };
+// STDCORE IS HERE, UNCONDITIONALLY: the namespaces every image needs whatever a
+// host supplies (`DECISIONS.md#namespaces-over-the-system-port` §4). There is
+// no scenario where omitting them is legitimate, so nothing here lets a host
+// do it -- and nothing lets a host's resolver answer one of them either.
+// stdextra is NOT imported by this module: it lives behind `stdextra()` in
+// `./stdextra.js`, so a program that never imports it never carries it.
+import STDCORE from '../../../dist/stdcore.forms' with { type: 'bytes' };
 
 // Arguments, the pump, capabilities. Shared with `host/flint.mjs`, which is a
 // node wrapper over the same file.
 import { instantiate } from './guest.js';
+import {
+  Reader, layer, compileCall, compileRequest, renderErrors, DEFAULT_FEATURES, PERF_FEATURES,
+} from './resolve.js';
+
+// The resolver building blocks (`DECISIONS.md#namespaces-over-the-system-port`
+// §4): small resolvers a host composes. `stdextra()` is in `./stdextra.js`.
+export {
+  chain, fromMap, segregate, virtualNamespaces, Reader, SOURCE_EXTENSIONS, nsPath,
+  // What `./stdextra.js` builds its resolver with; a host composing its own
+  // pre-read layer may too.
+  layer,
+} from './resolve.js';
 
 const utf8 = (bytes) => new TextDecoder().decode(bytes);
 const parse = (bytes) => JSON.parse(utf8(bytes));
 
-/// flint's own `clojure.core` and everything it requires. Every program needs
-/// them and a caller should not have to know that.
-let cachedLib = null;
-export function standardLibrary() {
-  if (!cachedLib) cachedLib = parse(STDLIB_JSON);
-  return cachedLib;
+/// The required layer, as a resolver the compile consults FIRST.
+const stdcore = layer(STDCORE);
+
+/// Which namespaces are stdcore -- answered by the embedded copy, and never put
+/// to a host's resolver.
+export function stdcoreNamespaces() {
+  return stdcore.names().map((p) => p.replace(/\//g, '.').replace(/_/g, '-'));
 }
 
 /// Which table slot each builtin sits in, for the shipped runtime. A program
@@ -60,7 +80,7 @@ export function loaderBuiltins() {
 }
 
 /// The raw artifacts, for a caller that wants to splice or instantiate by hand.
-export const artifacts = { compiler: COMPILER, runtime: RUNTIME, runtimeAot: RUNTIME_AOT };
+export const artifacts = { compiler: COMPILER, runtime: RUNTIME, runtimeAot: RUNTIME_AOT, reader: READER };
 
 async function moduleFrom(source) {
   if (source instanceof WebAssembly.Module) return source;
@@ -73,81 +93,68 @@ async function moduleFrom(source) {
     'the usual call.');
 }
 
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-function base64Encode(bytes) {
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i], b1 = bytes[i + 1] ?? 0, b2 = bytes[i + 2] ?? 0;
-    const t = (b0 << 16) | (b1 << 8) | b2;
-    out += B64[(t >> 18) & 63] + B64[(t >> 12) & 63] +
-           (i + 1 < bytes.length ? B64[(t >> 6) & 63] : '=') +
-           (i + 2 < bytes.length ? B64[t & 63] : '=');
-  }
-  return out;
-}
-
-function base64Decode(s) {
-  const clean = s.replace(/[^A-Za-z0-9+/]/g, '');
-  const out = new Uint8Array((clean.length * 3) >> 2);
-  let o = 0;
-  for (let i = 0; i < clean.length; i += 4) {
-    const n = (B64.indexOf(clean[i]) << 18) | (B64.indexOf(clean[i + 1]) << 12) |
-              ((B64.indexOf(clean[i + 2]) & 63) << 6) | (B64.indexOf(clean[i + 3]) & 63);
-    out[o++] = (n >> 16) & 255;
-    if (i + 2 < clean.length) out[o++] = (n >> 8) & 255;
-    if (i + 3 < clean.length) out[o++] = n & 255;
-  }
-  return out.subarray(0, o);
-}
-
-function edn(v) {
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(edn).join(' ')}]`;
-  if (v instanceof Set) return `#{${[...v].map(edn).join(' ')}}`;
-  if (v && v.sym) return v.sym;                    // an unquoted symbol
-  if (v && typeof v === 'object') {
-    return `{${Object.entries(v).map(([k, x]) => `${edn(k)} ${edn(x)}`).join(' ')}}`;
-  }
-  return String(v);
-}
-const sym = (s) => ({ sym: s });
-const kw = (s) => ({ sym: `:${s}` });
-
 // --- the API ---------------------------------------------------------------
 
 export { codec } from './codec.js';
 import { codec } from './codec.js';
 
 export class Compiler {
-  constructor(module) { this.module = module; }
+  constructor(module, reader) { this.module = module; this.reader = reader; }
 
+  /// The compiler and the reader, both compiled. Asynchronous because a browser
+  /// main thread refuses to compile modules this size synchronously.
   static async load(source = COMPILER) {
-    return new Compiler(await moduleFrom(source));
+    const [module, reader] = await Promise.all([moduleFrom(source), Reader.load(READER)]);
+    return new Compiler(module, reader);
   }
 
-  /// Compile to an Image.
+  /// Compile to an Image. **Asynchronous, and there is no synchronous twin**
+  /// (`DECISIONS.md#namespaces-over-the-system-port` §3): a resolver that
+  /// fetches over the network or reads IndexedDB answers with a promise, and a
+  /// synchronous API cannot be made asynchronous later without breaking every
+  /// caller.
   ///
-  /// Source comes from a RESOLVER -- a namespace to its bytes -- rather than a
-  /// directory, because there is no filesystem in a browser, in a Worker or
-  /// inside another sandbox, and sources may come from a bundle, a database or
-  /// a map already in memory. `files` is the convenience for the common case
-  /// of having them all to hand.
+  /// Source comes from a RESOLVER -- a namespace to its source -- asked only
+  /// for what the compiler actually reaches, one wave of names at a time. The
+  /// namespaces every image needs (`stdcoreNamespaces()`) are answered by the
+  /// SDK's own copy before `resolve` is ever consulted, and `resolve` is never
+  /// asked for one. The rest of the standard library is the `stdextra()`
+  /// building block, which a host composes in or leaves out:
+  ///
+  ///     import { Compiler, chain, fromMap } from '@3sln/flint';
+  ///     import { stdextra } from '@3sln/flint/stdextra';
+  ///     const c = await Compiler.load();
+  ///     const image = await c.compile({
+  ///       fn: 'app/main',
+  ///       resolve: chain(stdextra(), fromMap({ 'app.cljc': '(ns app) ..' })),
+  ///     });
   ///
   /// | | |
   /// | --- | --- |
-  /// | `resolve` | `(namespace) => source \| {source, workspace, tags} \| null` |
-  /// | `files`   | `{ 'path.cljc': source }`, an alternative to `resolve` |
-  /// | `workspaces` | `[{prefix, name, tags, grants, guard}]`, who owns which files |
+  /// | `resolve` | `(ns) => answer \| Promise<answer>`; see `resolve.js` for the answer's shape |
   /// | `fn`      | the function a default `run` would call |
   /// | `exports` | every other function that must stay callable |
-  /// | `optimize` | `['perf']` compiles each arity; `['size']` interprets |
+  /// | `optimize` | `['perf']` compiles each arity and drops checks; `['size']` interprets |
+  /// | `checks`  | `true`/`false` keeps or drops `#?(:flint/check ..)`; default: dropped under `perf` |
+  /// | `features` | the reader features, overriding the two above |
   /// | `shake`   | cut the runtime to what the program reaches (on by default) |
   /// | `meta`    | arbitrary metadata to record in the artifact |
-  compile({ resolve, files, workspaces, fn, entry, exports, optimize = [], shake = true,
-            runtime, slots, meta, memoryLimit = 3_000_000_000,
-            builtins, features, standardLibrary: withLib = true }) {
-    const target = fn ?? entry;
-    if (!target) throw new Error('compile needs `fn`, e.g. "my.app/main"');
+  async compile(opts = {}) {
+    const bytes = await this.emit({ ...opts, target: 'wasm' });
+    return new Image(bytes, opts.meta);
+  }
+
+  /// The artifact for `target` -- `'wasm'` (what `compile` wraps), `'llvm'`
+  /// (IR text, as bytes), `'clr'` (an assembly; `name` is its file's basename)
+  /// or `'jvm'` (a class; `className` names it) -- as bytes. The same request
+  /// the CLIs send for `:to <target>`, so the same program is the same bytes
+  /// from every door.
+  async emit({ resolve, fn, entry, target = 'wasm', exports, optimize = [], checks = null,
+               features, shake = true, runtime, slots, meta, builtins, name = null,
+               className = null, memoryLimit = 3_000_000_000 } = {}) {
+    const main = fn ?? entry;
+    if (!main) throw new Error('compile needs `fn`, e.g. "my.app/main"');
+    const t = String(target).replace(/^:/, '');
     // An ORDERED preference list. The first token this build understands
     // decides; the rest are what the caller would have wanted otherwise, and
     // anything unrecognised is ignored -- which is what makes a list written
@@ -155,32 +162,20 @@ export class Compiler {
     const known = { perf: true, size: false };
     const aot = optimize.map((o) => String(o).replace(/^:/, ''))
                         .map((o) => known[o]).find((v) => v !== undefined) ?? false;
-    const base = runtime ?? (aot ? RUNTIME_AOT : RUNTIME);
-    const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
-    const { files: all, workspaces: spaces } =
-      collectSources({ resolve, files, workspaces, target, withLib });
-    // Everything that must stay CALLABLE. Only reachable code ships (`modularity`),
-    // and a function nobody calls from the entry is exactly the one a host
-    // wants to call -- so a sandbox's callable set has to be declared. The
-    // default is every function in the entry's own namespace, because that is
-    // what a caller almost always means.
-    const keep = exports ?? [];
-    const spec = `{:files ${edn(all)} :entry ${target}` +
-                 (keep.length ? ` :exports [${keep.map((k) => String(k)).join(' ')}]` : '') +
-                 // STRINGS, not symbols: the analyzer compares a builtin name
-                 // as text, and `#{= nil?}` would match nothing while looking
-                 // exactly like it should.
-                 ` :builtins ${edn(new Set(builtins ?? Object.keys(table)))}` +
-                 ` :slots ${edn(table)}` +
-                 (aot ? ' :aot true' : '') +
-                 (shake ? ' :shake true' : '') +
-                 // Recorded IN the artifact, not just kept beside it: an image
-                 // written to disk has to still say what it needs. flint never
-                 // reads it (`structured-ports`).
-                 (meta ? ` :meta ${edn(meta)}` : '') +
-                 (spaces.length ? ` :workspaces ${ednWorkspaces(spaces)}` : '') +
-                 (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
-                 '}';
+    // Checks follow `:optimize` unless said otherwise -- the CLIs' rule
+    // (`strip_checks`), so `:optimize [perf]` is the same compile from here.
+    const strip = checks === null || checks === undefined ? aot : !checks;
+    const said = features ?? (strip ? PERF_FEATURES : null);
+    const wasm = t === 'wasm';
+    const table = slots ?? (wasm && aot ? aotRuntimeSlots() : runtimeSlots());
+    const request = compileRequest({
+      entry: main, target: t, exports: exports ?? [], features: said, aot,
+      // Only a wasm module is SHAKEN: the other targets resolve natives by name
+      // against whatever the host carries, and there is no module to cut.
+      shake: wasm && shake, meta, slots: table, builtins,
+      base: wasm ? (runtime ?? (aot ? RUNTIME_AOT : RUNTIME)) : null,
+      name: t === 'clr' ? (name ?? '') : null, className: t === 'jvm' ? className : null,
+    });
     const inst = instantiate(this.module);
     // Compiling a whole program, appending its compiled arities and then tree
     // shaking the result is the most memory this ever does, and the default
@@ -188,159 +183,18 @@ export class Compiler {
     // tree, and the failure surfaces as `memory access out of bounds` with
     // nothing pointing at the cap.
     if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(memoryLimit);
-    // The runtime module goes as its own ARGUMENT, not inside the spec: three
-    // quarters of a megabyte of base64 in an EDN string is three quarters of a
-    // megabyte for flint's reader to scan a character at a time, and that alone
-    // was 198 seconds of a 199-second compile.
-    const r = inst.run('flint.selfhost/main', ['wasm', spec, base64Encode(base)]);
-    if (r.code !== 0) throw new Error(`flint: ${r.out.trim()}`);
-    if (r.out.startsWith('!missing')) {
-      const missing = r.out.split('\n').slice(1).filter(Boolean);
-      throw new Error(
-        `flint: no source for ${missing.join(', ')}. ` +
-        'Every namespace a program requires has to be resolvable.');
-    }
-    // REFUSED is not missing. The source was found and read; the answer is that
-    // this workspace may not require it (`DECISIONS.md#workspace-capabilities`).
-    if (r.out.startsWith('!refused')) {
-      const refused = r.out.split('\n').slice(1).filter(Boolean);
-      const err = new Error(`flint: ${refused.join('\n        ')}`);
-      err.refused = refused;
+    const r = await compileCall(inst, request, {
+      resolve, stdcore, reader: this.reader, features: said ?? DEFAULT_FEATURES,
+    });
+    if (r[':errors']) {
+      const err = new Error(`flint: ${renderErrors(r[':errors'])}`);
+      // DATA, as the compiler answered it: every error at once, with kind,
+      // namespace and position, for a host that wants more than a sentence.
+      err.errors = r[':errors'];
       throw err;
     }
-    return new Image(base64Decode(r.out.trim()), meta);
+    return r[':artifact'];
   }
-}
-
-/// Every namespace the target reaches, from a resolver or a map.
-///
-/// The compiler resolves `:require`s itself, so what it needs is every file it
-/// might ask for. With `files` that is the map; with `resolve` it is what the
-/// resolver answers, and the compiler names anything missing.
-function collectSources({ resolve, files, workspaces, target, withLib }) {
-  const all = withLib ? { ...standardLibrary() } : {};
-  if (files) Object.assign(all, files);
-  // Exact-path entries first, then whatever prefixes the caller gave: the
-  // compiler takes the first match, so the specific has to precede the broad.
-  const spaces = [];
-  if (resolve) {
-    // A resolver is asked by NAMESPACE and answers with what that namespace IS;
-    // the compiler wants sources keyed by the path a namespace maps to.
-    const seen = new Set();
-    const want = [target.split('/')[0]];
-    while (want.length) {
-      const ns = want.pop();
-      if (seen.has(ns)) continue;
-      seen.add(ns);
-      const r = resolve(ns);
-      if (r == null) continue;
-      // A bare string is source and nothing else, which is what a resolver
-      // answered before there were workspaces and still answers.
-      const src = typeof r === 'string' ? r : r.source;
-      if (src == null) continue;
-      const path = ns.replace(/-/g, '_').replace(/\./g, '/') + '.cljc';
-      all[path] = src;
-      if (typeof r !== 'string' && (r.workspace || r.tags)) {
-        spaces.push({ prefix: path, name: r.workspace, tags: r.tags });
-      }
-      // Follow its requires, so a resolver is asked only for what is reached.
-      for (const m of String(src).matchAll(/\[([a-zA-Z0-9._-]+)\s/g)) want.push(m[1]);
-    }
-  }
-  // The standard library is its own WORKSPACE, and FIRST so that it keeps its
-  // own files whatever the caller declares.
-  //
-  // It used to be last, so that "anything the caller declared wins the prefix".
-  // That rule was about the caller's OWN files and it stopped being safe when
-  // the control plane started shipping in every image
-  // (`DECISIONS.md#bridges-are-the-only-door`): a caller declaring
-  // `{prefix: ''}` -- one workspace for everything, which is the documented way
-  // to say "do not check within my project" -- swallowed `flint/system.cljc`
-  // too, and the library's grants went with it. The program then failed to
-  // compile at `flint.system/answer` for naming a `:vars`-guarded builtin,
-  // which is a sentence about the embedder's prefix and nothing they wrote.
-  //
-  // A caller cannot re-scope `flint/` or `clojure/` any more. Those are not
-  // their files to scope, and the ability was never used for anything else.
-  //
-  // Without this every guard in the standard library would be unenforceable
-  // through the SDK: a guard is only checked ACROSS workspaces, and a program
-  // that declared none would share the anonymous workspace with the library it
-  // is being guarded against. `flint.host/request` is the first var this
-  // matters for (`DECISIONS.md#workspace-capabilities`).
-  //
-  // AND IT HOLDS `:host`, which it did not used to. This said "It grants
-  // nothing", and that was true while the guard was only on the VAR --
-  // `flint.host/request` was guarded and reached the host through a builtin
-  // nothing checked. The builtin is guarded now, and `flint.host/request` and
-  // `flint.host/ask` both call it, so the library implementing the capability
-  // has to hold it. Defining a guarded var still needs nothing; CALLING a
-  // guarded builtin is the part that changed.
-  //
-  // A grant, not an exemption. Letting a var's own guard authorise its own
-  // body was tried first and is a way to mint authority: a guard is written by
-  // the author about their own var, so any workspace could assert one, call
-  // the builtin behind it, and re-export it unguarded. A grant is conferred
-  // from outside -- here, by the SDK that ships the library.
-  //
-  // It does not let a caller past `flint.host/request`'s guard. An application
-  // holds `:host` or it does not, and that is the next check down.
-  //
-  // KEEP THIS THE SAME SENTENCE AS `lib/deps.edn`. Two front doors naming one
-  // workspace two ways is the defect this mechanism exists to stop, and a
-  // grant on one and not the other is exactly that.
-  //
-  // NOT `:vars` ANY MORE, and `lib/deps.edn` says the same: the call loop
-  // that resolved a call's `:fn` through `flint/var-named` is the compiler's
-  // own now, and no source may name that builtin
-  // (`DECISIONS.md#the-control-plane-is-the-runtimes`).
-  if (withLib) {
-    // `flint.deps`'s own workspace, BEFORE the blanket `flint/` entry below
-    // (the compiler takes the first match, so the specific precedes the
-    // broad -- same rule the comment above gives for exact paths before
-    // prefixes). No trailing slash: it has to match both `flint/deps.cljc`
-    // (the namespace `flint.deps` itself, a FILE beside `flint/deps/`, not
-    // in it) and `flint/deps/manifest.cljc` and its siblings
-    // (`DECISIONS.md#flint-deps-is-its-own-workspace`). No grant: none of
-    // the four files call anything `:host`-guarded.
-    spaces.push({ prefix: 'flint/deps', name: 'flint/deps' });
-    spaces.push({ prefix: 'clojure/', name: 'flint/flint', grants: ['host'] });
-    spaces.push({ prefix: 'flint/', name: 'flint/flint', grants: ['host'] });
-  }
-  for (const w of workspaces ?? []) spaces.push(w);
-  return { files: all, workspaces: spaces };
-}
-
-/// `[{prefix, name, tags, grants, guard}]` as the EDN the compiler reads.
-///
-/// `name` is a SYMBOL and `tags` maps symbol to symbol, because a workspace
-/// name and a tag reader are both things the reader resolves, not strings it
-/// would have to re-parse.
-function ednWorkspaces(spaces) {
-  return `[${spaces.map((w) => {
-    const parts = [`:prefix ${edn(String(w.prefix ?? ''))}`];
-    if (w.name) parts.push(`:name ${String(w.name)}`);
-    // KEYWORDS, and a set: a capability is a name, and holding one twice is
-    // not a thing (`DECISIONS.md#workspace-capabilities`).
-    const caps = (xs) => `#{${xs.map((c) => `:${String(c).replace(/^:/, '')}`).join(' ')}}`;
-    if (w.grants?.length) parts.push(`:grants ${caps(w.grants)}`);
-    if (w.guard?.length) parts.push(`:guard ${caps(w.guard)}`);
-    // A VIRTUAL workspace has no files: everything under its prefix is spoken
-    // to over a port (`DECISIONS.md#workspace-capabilities` step 4). `vars` is optional and buys
-    // compile-time checking of names.
-    if (w.virtual) parts.push(':virtual true');
-    if (w.vars?.length) {
-      parts.push(`:vars [${w.vars.map((v) => {
-        const a = v.arities ? ` :arities [${v.arities.join(' ')}]` : '';
-        return `{:name ${String(v.name)}${a}}`;
-      }).join(' ')}]`);
-    }
-    if (w.tags && Object.keys(w.tags).length) {
-      parts.push(`:tags {${Object.entries(w.tags)
-        .map(([t, v]) => `${String(t)} ${String(v)}`).join(' ')}}`);
-    }
-    return `{${parts.join(' ')}}`;
-  }).join(' ')}]`;
 }
 
 /// A compiled artifact: inert, holds functions, says what it is.
@@ -570,7 +424,7 @@ export class Sandbox {
 /// Compile and call, for the case that just wants an answer.
 export async function evaluate({ fn, args = [], compiler, ...opts }) {
   const c = compiler instanceof Compiler ? compiler : await Compiler.load(compiler);
-  const image = c.compile({ fn, ...opts });
+  const image = await c.compile({ fn, ...opts });
   const sandbox = await image.sandbox(opts);
   return sandbox.call(fn, args);
 }

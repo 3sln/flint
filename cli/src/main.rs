@@ -862,7 +862,7 @@ pub(crate) fn sdk_compile(sources: &[(String, String)], entry: &str, exports: &[
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir)?;
     for (ns, body) in sources {
-        let rel = ns_to_path(ns);
+        let rel = script::ns_key(ns, extension_of(true));
         let path = dir.join(&rel);
         if let Some(p) = path.parent() {
             fs::create_dir_all(p)?;
@@ -939,21 +939,17 @@ fn missing_message(missing: &str, features: Option<&[String]>) -> String {
     m
 }
 
-/// `my.ns` -> `my/ns.cljc`, the path the spec keys a file by.
+/// The extension a DIALECT is written in -- `.fln` for flint's own, `.cljc` for
+/// portable -- for naming a file that has no name of its own.
 ///
-/// The same mapping `flint.project/ns->path` makes, and it has to stay the
-/// same: the compiler finds a namespace by the path its name implies.
-fn ns_to_path(ns: &str) -> String {
-    let mut out = String::with_capacity(ns.len() + 5);
-    for c in ns.chars() {
-        match c {
-            '.' => out.push('/'),
-            '-' => out.push('_'),
-            c => out.push(c),
-        }
-    }
-    out.push_str(".cljc");
-    out
+/// The other direction of `flint.project/dialect-of`, and only for text whose
+/// dialect is already known: `flint.ception`'s `:sources` are portable source
+/// by that surface's contract, so the file they are spilled to is spelled that
+/// way. It used to be `ns_to_path`, which appended `.cljc` to every namespace it
+/// mapped and so made "portable" a property of the mapping rather than of the
+/// text; the resolver had to trim it straight back off.
+fn extension_of(portable: bool) -> &'static str {
+    if portable { ".cljc" } else { ".fln" }
 }
 
 /// The embedded compiler, loaded with every unit this binary carries.
