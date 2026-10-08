@@ -86,7 +86,7 @@ done
 for f in flint/cli flint/deps flint/deps/manifest flint/deps/registry; do
   [ -f "lib/$f.cljc" ] || fail "lib/$f.cljc is gone -- the bootstrap driver loads it, so it cannot be .fln"
 done
-echo "  ok   the four lib namespaces babashka loads are still .cljc"
+echo "  ok   the four lib namespaces the bootstrap driver loads are still .cljc"
 
 # The API review list cannot fall behind the code: a namespace added with no
 # section would be silently unreviewed while the list looked complete.

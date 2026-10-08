@@ -356,10 +356,21 @@
   "A `flint.project/fn-resolver` function over the filesystem, through the kin
   Java reader (`flint.driver.host-reader`) instead of `flint.reader`.
 
-  Answers `nil` (not found) or `{:preread :file :dialect :workspace :tags
-  :prelude :grants :guard}` -- `fn-resolver` decodes `:preread` under this
-  compile's features via `flint.project/read-entry`, so a file is read ONCE
-  here, deferred, however many compiles in this process reach it.
+  Answers `nil` (not found) or `{:preread :src :file :dialect :workspace
+  :tags :prelude :grants :guard}` -- `fn-resolver` decodes `:preread` under
+  this compile's features via `flint.project/read-entry`, so a file is read
+  ONCE here, deferred, however many compiles in this process reach it.
+
+  `:src` RIDES ALONG, UNUSED BY THE NORMAL PATH: `read-entry` takes the
+  `:preread` branch whenever its `:opts` match (always, for a file this
+  driver just read itself), so `:src` is dead weight on every ordinary
+  compile. It matters for `--emit-spec` and `--self`: the spec they build
+  keeps every field but `:forms` (`(dissoc s :forms)`, below), and without
+  `:src` a spec handed to `flint.selfhost`'s `build-image` -- which skips
+  resolution for an already-resolved spec and falls through to
+  `flint.compiler/read-source`'s `:src`-or-nothing fallback -- found NO text
+  for `clojure.core` at all: `bin/check-sdk`'s reference artifact failed
+  with \"no source for namespace clojure.core\" before this was added.
 
   A read the kin reader refuses THROWS, as `flint.project/fn-resolver`'s own
   docstring says every resolver function here must: `flint.driver.host-reader/deferred-read`
@@ -370,7 +381,7 @@
     (let [proj (project-of (:root s))
           dialect (project/dialect-of (:file s))
           bytes (hr/deferred-read (:file s) (:src s) dialect (:tags proj))]
-      {:preread bytes :file (:file s) :dialect dialect
+      {:preread bytes :src (:src s) :file (:file s) :dialect dialect
        :workspace (:name proj) :tags (:tags proj)
        :prelude (:prelude proj) :grants (:grants proj) :guard (:guard proj)})))
 
@@ -1032,11 +1043,15 @@
         ;; doors that send source text; only this process's own compile below
         ;; is handed the forms `resolve-sources!` read.
         ;;
-        ;; `sources` HAS NO `:src` ANY MORE -- the resolver above hands over
-        ;; `:preread` bytes and never raw text, so `--self` (`compile-with-flint`)
-        ;; sends a spec with no source text either. No test here exercises
-        ;; `--self`; if it needs text, that is this change's doing and worth
-        ;; checking before relying on it.
+        ;; `sources` DOES STILL CARRY `:src`: `resolve-ns` keeps the text
+        ;; it already read alongside `:preread`, unused on the ordinary
+        ;; compile path but load-bearing here -- `bin/check-sdk`'s reference
+        ;; artifact, built by handing THIS spec to `flintc.wasm`
+        ;; (`host/flint-argv.mjs`), failed with "no source for namespace
+        ;; clojure.core" the one time `:src` was missing:
+        ;; `flint.selfhost/build-image` skips resolution for an
+        ;; already-resolved spec like this one, and `flint.compiler/read-source`'s
+        ;; fallback for a namespace with no `:forms` is `:src`, not nothing.
         spec {:sources (into {} (map (clojure.core/fn [[n s]] [n (dissoc s :forms)]) sources))
               :order order :entry fn
               :exports (vec (distinct exports))
